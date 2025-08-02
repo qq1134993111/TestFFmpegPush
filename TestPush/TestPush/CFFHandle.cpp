@@ -1,4 +1,6 @@
 #include "CFFHandle.h"
+#include <thread>
+#include <chrono>
 
 static const char* AvErrorString(int32_t av_error)
 {
@@ -280,7 +282,7 @@ bool CFFOutput::InitOutput(const std::string& out_uri, const std::string& out_fo
 	return true;
 }
 
-int CFFHandle::DecodePacket(AVCodecContext* dec, const AVPacket* pkt, AVFrame* frame, DecodePacketHandler handler)
+int CFFHandle::DecodePacket(AVCodecContext* dec, AVPacket* pkt, AVFrame* frame, DecodePacketHandler handler)
 {
 	int ret = 0;
 
@@ -311,7 +313,7 @@ int CFFHandle::DecodePacket(AVCodecContext* dec, const AVPacket* pkt, AVFrame* f
 
 		ret = handler(frame);
 
-		av_frame_unref(frame);
+		av_frame_unref(frame);//avcodec_receive_frame 读取的帧需要av_frame_unref 释放
 	}
 
 	return ret;
@@ -349,7 +351,7 @@ int CFFHandle::EncodeFrame(AVCodecContext* enc, const AVFrame* frame, AVPacket* 
 		//pkt->stream_index = st->index;
 
 		ret = handler(pkt);
-
+		av_packet_unref(pkt);
 		if (ret < 0)
 		{
 			fprintf(stderr, "Error while writing output packet: %s\n", AvErrorString(ret));
@@ -403,31 +405,32 @@ bool CFFHandle::HandlePakege()
 	dstFrame->width = output_vec_->width;
 	dstFrame->height = output_vec_->height;
 
-	AVPacket* pkt = av_packet_alloc();
-	av_new_packet(pkt, input_vdec_->width * input_vdec_->height); //调整packet的数据
+	AVPacket* in_pkt = av_packet_alloc();
+	AVPacket* out_pkt = av_packet_alloc();
+
 
 	int frameIndex = 0;
 
-	auto handle_frame = [&](AVFrame* frame) ->int
+	auto handle_frame = [&](AVFrame* src_frame) ->int
 		{
 			//转换
-			sws_scale(video_sws_context_, frame->data, frame->linesize, 0, input_vdec_->height, dstFrame->data, dstFrame->linesize);
+			sws_scale(video_sws_context_, src_frame->data, src_frame->linesize, 0, input_vdec_->height, dstFrame->data, dstFrame->linesize);
 
 			//转换 PTS
 			dstFrame->pts = av_rescale_q(srcFrame->pts,
 				input_vst_->time_base, // 原始时间基准
 				output_vec_->time_base);  // 目标时间基准
 
-			EncodeFrame(output_vec_, dstFrame, pkt, [&](AVPacket* enc_pkt)->int
+			EncodeFrame(output_vec_, dstFrame, out_pkt, [&](AVPacket* out_pkt)->int
 				{
 
-					av_packet_rescale_ts(enc_pkt, output_vec_->time_base, output_vst_->time_base);
-					enc_pkt->stream_index = output_vst_->index;
-					enc_pkt->pos = -1;
+					av_packet_rescale_ts(out_pkt, output_vec_->time_base, output_vst_->time_base);
+					out_pkt->stream_index = output_vst_->index;
+					out_pkt->pos = -1;
 
 					// 写入数据包到文件
-					enc_pkt->stream_index = output_vst_->index;
-					ret = av_interleaved_write_frame(output_fmt_ctx_, enc_pkt);
+					out_pkt->stream_index = output_vst_->index;
+					ret = av_interleaved_write_frame(output_fmt_ctx_, out_pkt);
 					if (ret < 0)
 					{
 						printf("av_interleaved_write_frame error:%d,%s\n", ret, AvErrorString(ret));
@@ -445,7 +448,7 @@ bool CFFHandle::HandlePakege()
 
 	while (is_running_)
 	{
-		ret = av_read_frame(input_fmt_ctx_, pkt);
+		ret = av_read_frame(input_fmt_ctx_, in_pkt);
 		if (ret < 0)
 		{
 			if (ret == AVERROR_EOF)
@@ -461,25 +464,28 @@ bool CFFHandle::HandlePakege()
 		}
 
 
-		if (pkt->stream_index == input_video_stream_index_)
+		if (in_pkt->stream_index == input_video_stream_index_)
 		{
 
-			DecodePacket(input_vdec_, pkt, srcFrame, handle_frame);
+			DecodePacket(input_vdec_, in_pkt, srcFrame, handle_frame);
+
+			//std::this_thread::sleep_for(std::chrono::milliseconds(25));
 
 		}
-		else if (pkt->stream_index == input_audio_stream_index_)
+		else if (in_pkt->stream_index == input_audio_stream_index_)
 		{
 			//pkt->time_base = input_ast_->time_base;
-			av_packet_rescale_ts(pkt, input_ast_->time_base, output_ast_->time_base);
-			pkt->stream_index = output_ast_->index;
-			ret = av_interleaved_write_frame(output_fmt_ctx_, pkt);
+			av_packet_rescale_ts(in_pkt, input_ast_->time_base, output_ast_->time_base);
+			in_pkt->stream_index = output_ast_->index;
+			ret = av_interleaved_write_frame(output_fmt_ctx_, in_pkt);
 			if (ret < 0)
 			{
 				printf("av_interleaved_write_frame error:%d,%s\n", ret, AvErrorString(ret));
 			}
 		}
 
-		av_packet_unref(pkt);
+		av_packet_unref(in_pkt);//av_read_frame 获取的 需要av_packet_unref
+
 	}
 
 	/* flush the decoders */
@@ -491,7 +497,8 @@ bool CFFHandle::HandlePakege()
 
 	av_frame_free(&srcFrame);
 	av_frame_free(&dstFrame);
-	av_packet_free(&pkt);
+	av_packet_free(&in_pkt);
+	av_packet_free(&out_pkt);
 	av_free(outBuffer);
 
 	return true;

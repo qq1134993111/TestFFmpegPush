@@ -70,7 +70,7 @@ public:
 	SwsContext* video_sws_context_ = nullptr;
 private:
 	using DecodePacketHandler = std::function<int(AVFrame* frame)>;
-	int DecodePacket(AVCodecContext* dec, const AVPacket* pkt, AVFrame* frame, DecodePacketHandler handler);
+	int DecodePacket(AVCodecContext* dec, AVPacket* pkt, AVFrame* frame, DecodePacketHandler handler);
 
 	using EncodeFrameHandler = std::function<int(AVPacket* pkt)>;
 	int EncodeFrame(AVCodecContext* enc, const AVFrame* frame, AVPacket* pkt, EncodeFrameHandler handler);
