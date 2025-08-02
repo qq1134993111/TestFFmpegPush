@@ -213,7 +213,7 @@ bool CFFOutput::InitOutput(const std::string& out_uri, const std::string& out_fo
 	output_vec_->flags |= (output_fmt_ctx_->flags & AVFMT_GLOBALHEADER) ? AV_CODEC_FLAG_GLOBAL_HEADER : 0;
 
 	output_vec_->level = 51;
-	output_vec_->gop_size = 60;
+	output_vec_->gop_size = 30;
 	AVDictionary* x264_options = nullptr;
 	av_dict_set(&x264_options, "preset", "veryfast", 0);
 	av_dict_set(&x264_options, "tune", "zerolatency", 0);

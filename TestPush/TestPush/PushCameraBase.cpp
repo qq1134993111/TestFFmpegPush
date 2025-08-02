@@ -343,7 +343,7 @@ void PushCameraBase::SetH264EncoderOption(av::Dictionary& x264_opts, av::VideoEn
 	//设置两个关键帧（I帧）之间的最大帧数.GOP 越大，压缩率越高（因为P/B帧更多），但随机拖动（seek）的响应速度越慢
 	//视频点播（VOD）一般设置为帧率的2-10倍（如 25fps -> GOP 250）
 	//直播流媒体为了加快进入速度和切片，通常设置为较小的值（如帧率的1-2倍，25fps帧率 即 25-50）。
-	vec.setGopSize(60);
+	vec.setGopSize(30);
 
 	//bf (B-Frames) 最大 B 帧数
 	//设置连续B帧的最大数量。B帧可以显著提高压缩率
