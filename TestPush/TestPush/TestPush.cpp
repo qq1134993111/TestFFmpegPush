@@ -8,6 +8,7 @@
 
 #include "PushCameraRtmp.h"
 #include "PushCameraRtsp.h"
+#include "CFFHandle.h"
 
 std::string GetDeviceName(const std::string keyword = "USB 4K Camera Audio")
 {
@@ -42,11 +43,14 @@ std::string GetDeviceName(const std::string keyword = "USB 4K Camera Audio")
 
 int main(int argc, char** argv)
 {
+	PushCameraBase::Init();
+	std::string input_uri = PushCameraBase::GetCameraAndmicrophoneInputString("USB 4K Camera", GetDeviceName("USB 4K Camera Audio"));
+	std::string input_fmt_name = "dshow";
 
-	if (1)
+	if (0)
 	{
 		PushCameraRtsp rtsp;
-		rtsp.InitInput(PushCameraBase::GetCameraAndmicrophoneInputString("USB 4K Camera", GetDeviceName("Senary")), "dshow");
+		rtsp.InitInput(input_uri, input_fmt_name);
 		//rtsp.InitOutput("rtsp://43.153.201.69:554/live/camera", "rtsp");
 		rtsp.InitOutput("rtsp://127.0.0.1:554/live/camera", "rtsp");
 		rtsp.HandlePacket();
@@ -55,15 +59,21 @@ int main(int argc, char** argv)
 	if (0)
 	{
 		PushCameraRtmp rtmp;
-		rtmp.InitInput(PushCameraBase::GetCameraAndmicrophoneInputString("USB 4K Camera", GetDeviceName("USB 4K Camera Audio")), "dshow");
+		rtmp.InitInput(input_uri, input_fmt_name);
 		//rtmp.InitOutput("rtmp://43.153.201.69:1935/live/camera", "flv");
 		rtmp.InitOutput("rtmp://127.0.0.1:1935/live/camera", "flv");
 		rtmp.HandlePacket();
 	}
 
-	//PushCameraRtmpFunc("USB 4K Camera", GetDeviceName("USB 4K Camera Audio"/*"Senary"*/));
-	// 
-	// 
-	//PushCameraRtsp("USB 4K Camera", GetDeviceName("USB 4K Camera Audio"/*"Senary"*/),"dshow", "rtsp://127.0.0.1:554/live/camera","rtsp");
+	if (1)
+	{
+
+		CFFHandle handle;
+		handle.InitInput(input_uri, input_fmt_name);
+		//handle.InitOutput("rtmp://127.0.0.1:1935/live/camera", "flv");
+		handle.InitOutput("rtsp://127.0.0.1:554/live/camera", "rtsp");
+		handle.HandlePakege();
+	}
+
 
 }

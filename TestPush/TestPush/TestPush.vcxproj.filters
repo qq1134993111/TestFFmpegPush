@@ -27,6 +27,9 @@
     <ClCompile Include="PushCameraBase.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="CFFHandle.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="PushCameraRtmp.h">
@@ -36,6 +39,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="PushCameraBase.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="CFFHandle.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

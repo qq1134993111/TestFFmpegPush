@@ -136,12 +136,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="CFFHandle.cpp" />
     <ClCompile Include="PushCameraBase.cpp" />
     <ClCompile Include="PushCameraRtmp.cpp" />
     <ClCompile Include="PushCameraRtsp.cpp" />
     <ClCompile Include="TestPush.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CFFHandle.h" />
     <ClInclude Include="PushCameraBase.h" />
     <ClInclude Include="PushCameraRtmp.h" />
     <ClInclude Include="PushCameraRtsp.h" />
