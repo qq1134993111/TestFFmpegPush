@@ -14,6 +14,9 @@ extern "C"
 #include <libavutil/error.h>
 #include <libavdevice/avdevice.h>
 #include <libavutil/time.h>
+#include <libswresample/swresample.h>
+#include <libavutil/opt.h>
+#include <libavutil/audio_fifo.h>
 
 #pragma comment(lib, "avformat.lib")
 #pragma comment(lib, "avcodec.lib")
@@ -68,6 +71,7 @@ public:
 	bool HandlePakege();
 	bool is_running_ = false;
 	SwsContext* video_sws_context_ = nullptr;
+	SwrContext* audio_swr_context_ = nullptr;//“Ù∆µ÷ÿ≤…—˘
 private:
 	using DecodePacketHandler = std::function<int(AVFrame* frame)>;
 	int DecodePacket(AVCodecContext* dec, AVPacket* pkt, AVFrame* frame, DecodePacketHandler handler);
