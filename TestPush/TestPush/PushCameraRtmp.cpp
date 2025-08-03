@@ -49,11 +49,11 @@ bool PushCameraRtmp::InitOutput(const std::string& out_uri, const std::string& o
 	output_vec_.setWidth(input_vdec_.width());
 	output_vec_.setHeight(input_vdec_.height());
 	output_vec_.setPixelFormat(used_pixel_format);
-	output_vec_.setTimeBase(av::Rational{1,fps_});
-	output_vec_.raw()->framerate = av::Rational{fps_,1};
+	output_vec_.setTimeBase(av::Rational{ 1,fps_ });
+	output_vec_.raw()->framerate = av::Rational{ fps_,1 };
 	output_vec_.setBitRate(4000000);
 	output_vec_.addFlags(output_ctx_.outputFormat().isFlags(AVFMT_GLOBALHEADER) ? AV_CODEC_FLAG_GLOBAL_HEADER : 0);
-	
+
 	av::Dictionary x264_opts;
 	SetH264EncoderOption(x264_opts, output_vec_);
 	output_vec_.open(x264_opts, ec);
@@ -94,38 +94,10 @@ bool PushCameraRtmp::InitOutput(const std::string& out_uri, const std::string& o
 	return true;
 }
 
-/*
-首先，我们必须理解 zerolatency 这个参数到底做了什么。为了实现最低的延迟，它会调整一系列 x264 编码参数，其中最关键的两个改动是：
 
-禁用了B帧 (B-Frames)：B帧是双向预测帧，它需要参考前面和后面的帧才能解码。这就意味着编码器必须缓存一些帧，等待后续帧的到来，这会引入延迟。zerolatency 为了消除这种延迟，会强制设置 bframes=0。
-
-禁用了帧重排序 (Frame Reordering)：正因为没有了B帧，视频流中的帧就不再需要重排序。帧的**解码顺序（DTS, Decoding Time Stamp）和显示顺序（PTS, Presentation Time Stamp）**变得完全一致。
-
-结论就是：在 zerolatency 模式下，对于每一帧数据，它的 DTS 必须等于 PTS。
-*/
-//#define  SET_ZEROLATENCY
 
 bool PushCameraRtmp::HandlePacket()
 {
-#ifdef SET_ZEROLATENCY
-	int64_t next_pts = 0;  //设置了"tune"为 "zerolatency"  必须手动为即将送入编码器的每一帧 AVFrame 生成一个严格、线性、单调递增的PTS。
-	AVRational framerate = output_vec_.raw()->framerate;
-	AVRational time_base = output_vec_.timeBase().getValue();
-	// 检查参数是否有效
-	if (framerate.num <= 0 || framerate.den <= 0)
-	{
-		// 错误：帧率未设置或无效，无法计算 frame_duration
-		return false;
-	}
-	//av_inv_q 函数用于计算一个 AVRational 结构体的倒数
-	//framerate {30，1}表示每秒30帧   av_inv_q(framerate) 表示每帧需要多少秒 {1，30}
-	//int64_t av_rescale_q(int64_t a, AVRational bq, AVRational cq) 函数用于将一个数值（通常是时间戳或持续时间）从一个时间基准（或单位）转换到另一个时间基准。
-	//相当于a*bq/cq
-	int64_t frame_duration = av_rescale_q(1, av_inv_q(framerate), time_base);
-
-#endif // SET_ZEROLATENCY
- 
-
 	is_running_.store(true, std::memory_order_relaxed);
 
 	//
@@ -196,14 +168,6 @@ bool PushCameraRtmp::HandlePacket()
 
 			//std::clog << "outFrame: pts=" << outFrame.pts() << " / " << outFrame.pts().seconds() << " / " << outFrame.timeBase() << ", " << outFrame.width() << "x" << outFrame.height() << ", size=" << outFrame.size() << ", ref=" << outFrame.isReferenced() << ":" << outFrame.refCount() << " / type: " << outFrame.pictureType() << std::endl;
 
-#ifdef SET_ZEROLATENCY
-			//outFrame.setTimeBase(output_vst_.timeBase());
-			outFrame.setPictureType();
-			outFrame.setStreamIndex(output_vst_.index());
-			outFrame.raw()->format = AV_PIX_FMT_YUV420P;
-			outFrame.raw()->pts = next_pts;
-			outFrame.raw()->pkt_dts = next_pts;
-#endif
 			// ENCODE
 			av::Packet opkt = output_vec_.encode(outFrame, ec);
 			if (ec)
@@ -228,10 +192,7 @@ bool PushCameraRtmp::HandlePacket()
 				std::cerr << "Error write packet: " << ec.value() << ", " << ec.message() << std::endl;
 				return false;
 			}
-#ifdef SET_ZEROLATENCY
-			next_pts += frame_duration;
-#endif
-		}
+			}
 		else if (pkt.streamIndex() == input_audio_stream_index_)
 		{
 			//std::clog << "Read audio packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " / " << pkt.pts().seconds() << " / " << pkt.timeBase() << " / st: " << pkt.streamIndex() << std::endl;
@@ -245,7 +206,7 @@ bool PushCameraRtmp::HandlePacket()
 			}
 
 		}
-	}
+		}
 
 	output_ctx_.writeTrailer();
 	input_ctx_.close();
@@ -253,4 +214,4 @@ bool PushCameraRtmp::HandlePacket()
 	is_running_.store(false, std::memory_order_relaxed);
 
 	return true;
-}
+	}

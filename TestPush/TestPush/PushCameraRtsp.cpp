@@ -52,7 +52,7 @@ bool PushCameraRtsp::InitOutput(const std::string& out_uri, const std::string& o
 	output_vec_.setWidth(input_vdec_.width());
 	output_vec_.setHeight(input_vdec_.height());
 	output_vec_.setPixelFormat(used_pixel_format);
-	output_vec_.setTimeBase(av::Rational{1,fps_});
+	output_vec_.setTimeBase(av::Rational{ 1,fps_ });
 	//output_vec_.raw()->framerate = av::Rational{ fps_,1 };
 	output_vec_.setBitRate(4000000);
 	output_vec_.addFlags(output_ctx_.outputFormat().isFlags(AVFMT_GLOBALHEADER) ? AV_CODEC_FLAG_GLOBAL_HEADER : 0);
@@ -60,7 +60,7 @@ bool PushCameraRtsp::InitOutput(const std::string& out_uri, const std::string& o
 	av::Dictionary x264_opts;
 	SetH264EncoderOption(x264_opts, output_vec_);
 	//其他rtsp参数
-	x264_opts.set("rtsp_transport","tcp");  //强制使用 TCP 而非默认 UDP
+	x264_opts.set("rtsp_transport", "tcp");  //强制使用 TCP 而非默认 UDP
 	//x264_opts.set("max_delay", "200000");   //设置最大接收延迟（200 ms）
 	//x264_opts.set("fflags", "nobuffer");    //禁用缓冲，降低延迟
 	//x264_opts.set("timeout", "5000000");    //网络阻塞等待上限（5 s）
@@ -102,7 +102,7 @@ bool PushCameraRtsp::InitOutput(const std::string& out_uri, const std::string& o
 		av::AudioEncoderContext audio_encoder_context{ acodec };
 		output_aec_ = std::move(audio_encoder_context);
 	}
-	
+
 	output_aec_.setSampleRate(input_adec_.sampleRate());
 	output_aec_.setSampleFormat(AV_SAMPLE_FMT_FLTP); // 注意：AAC编码器可能不支持所有PCM格式，可能需要重采样
 	output_aec_.setChannelLayout(AV_CH_LAYOUT_STEREO);
@@ -200,8 +200,8 @@ bool PushCameraRtsp::HandlePacket()
 			}
 
 			std::clog << "inpFrame: pts=" << inpFrame.pts()
-				<< " seconds: " << inpFrame.pts().seconds() << " timeBase: " << inpFrame.timeBase() << 
-				", " << inpFrame.width() << "x" << inpFrame.height() << ", size=" << inpFrame.size() 
+				<< " seconds: " << inpFrame.pts().seconds() << " timeBase: " << inpFrame.timeBase() <<
+				", " << inpFrame.width() << "x" << inpFrame.height() << ", size=" << inpFrame.size()
 				<< ", ref=" << inpFrame.isReferenced() << ":" << inpFrame.refCount() << "  type: " << inpFrame.pictureType() << std::endl;
 
 			// Change timebase
@@ -226,12 +226,12 @@ bool PushCameraRtsp::HandlePacket()
 			}
 
 			std::clog << "outFrame: pts=" << outFrame.pts()
-				<< " seconds: " << outFrame.pts().seconds() << " timeBase: " << outFrame.timeBase() 
-				<< ", " << outFrame.width() << "x" << outFrame.height() << ", size=" << outFrame.size() 
+				<< " seconds: " << outFrame.pts().seconds() << " timeBase: " << outFrame.timeBase()
+				<< ", " << outFrame.width() << "x" << outFrame.height() << ", size=" << outFrame.size()
 				<< ", ref=" << outFrame.isReferenced() << ":" << outFrame.refCount() << " type: " << outFrame.pictureType() << std::endl;
 
 			//outFrame.raw()->pkt_dts = outFrame.raw()->pts;
-			
+
 			// ENCODE
 			av::Packet opkt = output_vec_.encode(outFrame, ec);
 			if (ec)
@@ -273,69 +273,90 @@ bool PushCameraRtsp::HandlePacket()
 			else if (!in_sample)
 			{
 				std::cerr << "Empty frame\n";
-				continue;
+				//continue;
 			}
 
-			//std::clog << "inpFrame: pts=" << in_sample.pts() << " / " << in_sample.pts().seconds() << " / " << in_sample.timeBase() << ", " <<  "size = " << in_sample.size() << ", ref = " << in_sample.isReferenced() << ":" << in_sample.refCount() << " / type : "  << std::endl;
+			std::clog << "  Samples [in]: " << in_sample.samplesCount()
+				<< ", ch: " << in_sample.channelsCount()
+				<< ", freq: " << in_sample.sampleRate()
+				<< ", name: " << in_sample.channelsLayoutString()
+				<< ", pts: " << in_sample.pts().seconds()
+				<< ", ref=" << in_sample.isReferenced() << ":" << in_sample.refCount()
+				<< std::endl;
 
-			//in_sample.setTimeBase(output_aec_.timeBase());
 
-			audio_resampler_.push(in_sample, ec);
-			if (ec)
+			// Empty samples set should not be pushed to the resampler, but it is valid case for the
+			// end of reading: during samples empty, some cached data can be stored at the resampler
+			// internal buffer, so we should consume it.
+			if (in_sample)
 			{
-				std::cerr << "audio_resampler_ push error: " << ec.value() << "," << ec.message() << std::endl;
-				return false;
-			}
-
-			auto ou_samples = av::AudioSamples::null();
-			while ((ou_samples = audio_resampler_.pop(ou_samples.samplesCount() / 2, ec)))
-			{
-				/*std::clog << "  Samples [ou]: " << ou_samples.samplesCount()
-					<< ", ch: " << ou_samples.channelsCount()
-					<< ", freq: " << ou_samples.sampleRate()
-					<< ", name: " << ou_samples.channelsLayoutString()
-					<< ", pts: " << ou_samples.pts().seconds()
-					<< ", ref=" << ou_samples.isReferenced() << ":" << ou_samples.refCount()
-					<< std::endl;
-				*/
-
-				// ENCODE
-				ou_samples.setStreamIndex(output_ast_.index());
-				ou_samples.setTimeBase(output_aec_.timeBase());
-				ou_samples.raw()->nb_samples = output_aec_.frameSize();
-
-				av::Packet opkt = output_aec_.encode(ou_samples, ec);
+				audio_resampler_.push(in_sample, ec);
 				if (ec)
 				{
-					std::cerr << "Encoding error: " << ec.value() << "," << ec.message() << std::endl;
+					std::clog << "Resampler push error: " << ec << ", text: " << ec.message() << std::endl;
+					continue;
+				}
+			}
+
+			// Pop resampler data
+			bool getAll = !in_sample;
+			while (true)
+			{
+				av::AudioSamples ouSamples(output_aec_.sampleFormat(), output_aec_.frameSize(), output_aec_.channelLayout(), output_aec_.sampleRate());
+
+				// Resample:
+				bool hasFrame = audio_resampler_.pop(ouSamples, getAll, ec);
+				if (ec)
+				{
+					std::clog << "Resampling status: " << ec << ", text: " << ec.message() << std::endl;
+					break;
+				}
+				else if (!hasFrame)
+				{
+					break;
+				}
+				else
+				{
+					std::clog << "  Samples [ou]: " << ouSamples.samplesCount()
+						<< ", ch: " << ouSamples.channelsCount()
+						<< ", freq: " << ouSamples.sampleRate()
+						<< ", name: " << ouSamples.channelsLayoutString()
+						<< ", pts: " << ouSamples.pts().seconds()
+						<< ", ref=" << ouSamples.isReferenced() << ":" << ouSamples.refCount()
+						<< std::endl;
+				}
+
+				// ENCODE
+				ouSamples.setStreamIndex(output_ast_.index());
+				ouSamples.setTimeBase(output_aec_.timeBase());
+
+				av::Packet opkt = output_aec_.encode(ouSamples, ec);
+				if (ec)
+				{
+					std::cerr << "Encoding error: " << ec << ", " << ec.message() << std::endl;
 					return false;
-					//continue;
 				}
 				else if (!opkt)
 				{
-					std::cerr << "Empty packet\n";
+					//cerr << "Empty packet\n";
 					continue;
 				}
 
-				// output stream
 				opkt.setStreamIndex(output_ast_.index());
 
-				//std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " / " << opkt.pts().seconds() << " / " << opkt.timeBase() << " / st: " << opkt.streamIndex() << std::endl;
+				std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " / " << opkt.pts().seconds() << " / " << opkt.timeBase() << " / st: " << opkt.streamIndex() << std::endl;
 
 				output_ctx_.writePacket(opkt, ec);
 				if (ec)
 				{
-					std::cerr << "Error write packet: " << ec.value() << ", " << ec.message() << std::endl;
+					std::cerr << "Error write packet: " << ec << ", " << ec.message() << std::endl;
 					return false;
 				}
-
-
 			}
 
-			if (ec)
-			{
-				std::clog << "Resampling status: " << ec << ", text: " << ec.message() << std::endl;
-			}
+			// For the first packets samples can be empty: decoder caching
+			//if (!pkt && !in_sample)
+			//	break;
 
 		}
 	}
