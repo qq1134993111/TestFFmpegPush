@@ -308,6 +308,202 @@ bool CFFOutput::InitOutput(const std::string& out_uri, const std::string& out_fo
 	return true;
 }
 
+bool CFFHandle::InitVedioPkg()
+{
+	video_out_pkt_ = av_packet_alloc();
+	if (video_out_pkt_ == nullptr)
+	{
+		printf("av_packet_alloc failed\n");
+		return false;
+	}
+
+	//设置数据转换参数
+			//将原始数据转为RGB格式
+	video_sws_context_ = sws_getContext(
+		input_vdec_->width, input_vdec_->height, input_vdec_->pix_fmt,//源格式
+		output_vec_->width, output_vec_->height, output_vec_->pix_fmt,//目标格式
+		SWS_BICUBIC, NULL, NULL, NULL);
+	if (video_sws_context_ == nullptr)
+	{
+		printf("sws_getContext failed\n");
+		return false;
+	}
+
+	//分配空间 
+	//一帧图像数据大小
+	int numBytes = av_image_get_buffer_size(output_vec_->pix_fmt, output_vec_->width, output_vec_->height, 1);
+	vedio_out_buffer_ = (unsigned char*)av_malloc(numBytes * sizeof(unsigned char));
+	if (vedio_out_buffer_ == nullptr)
+	{
+		printf("av_malloc failed\n");
+		return false;
+	}
+
+	vedio_in_frame_ = av_frame_alloc();
+	video_out_frame_ = av_frame_alloc();
+	if (vedio_in_frame_ == nullptr || video_out_frame_ == nullptr)
+	{
+		printf("av_frame_alloc failed\n");
+		return false;
+	}
+
+	//会将dstFrame的数据按指定格式自动"关联"到outBuffer  即dstFrame中的数据改变了out_buffer中的数据也会相应的改变
+	int ret = av_image_fill_arrays(video_out_frame_->data, video_out_frame_->linesize, vedio_out_buffer_, output_vec_->pix_fmt, output_vec_->width, output_vec_->height, 1);
+	if (ret < 0)
+	{
+		printf("av_image_fill_arrays failed %d,%s", ret, AvErrorString(ret));
+		return false;
+	}
+	video_out_frame_->format = output_vec_->pix_fmt;
+	video_out_frame_->width = output_vec_->width;
+	video_out_frame_->height = output_vec_->height;
+
+	return true;
+}
+
+void CFFHandle::FreeVedioPkg()
+{
+	if (video_sws_context_ != nullptr)
+	{
+		sws_freeContext(video_sws_context_);
+		video_sws_context_ = nullptr;
+	}
+
+	if (vedio_in_frame_ != nullptr)
+	{
+		av_frame_free(&vedio_in_frame_);
+		vedio_in_frame_ = nullptr;
+	}
+
+	if (video_out_frame_ != nullptr)
+	{
+		av_frame_free(&video_out_frame_);
+		video_out_frame_ = nullptr;
+	}
+
+	if (video_out_pkt_ != nullptr)
+	{
+		av_packet_free(&video_out_pkt_);
+		video_out_pkt_ = nullptr;
+	}
+
+	if (vedio_out_buffer_ != nullptr)
+	{
+		av_free(vedio_out_buffer_);
+		vedio_out_buffer_ = nullptr;
+	}
+}
+
+bool CFFHandle::InitAudioPkg()
+{
+	audio_out_pkt_ = av_packet_alloc();
+	if (audio_out_pkt_ == nullptr)
+	{
+		printf("av_packet_alloc failed\n");
+		return false;
+	}
+
+	if (input_adec_->ch_layout.u.mask == 0)
+	{
+		AVChannelLayout ch_layout = {  };
+		av_channel_layout_default(&ch_layout, input_adec_->ch_layout.nb_channels);
+		input_adec_->ch_layout = ch_layout;
+	}
+
+	int ret = swr_alloc_set_opts2(&audio_swr_context_,
+		&output_aec_->ch_layout,
+		output_aec_->sample_fmt,
+		output_aec_->sample_rate,
+		&input_adec_->ch_layout,
+		input_adec_->sample_fmt,// PCM源文件的采样格式
+		input_adec_->sample_rate, 0, nullptr);
+
+	if (ret < 0)
+	{
+		printf("swr_alloc_set_opts2 error:%d,%s\n", ret, AvErrorString(ret));
+		return false;
+	}
+	ret = swr_init(audio_swr_context_);
+	if (ret < 0)
+	{
+		printf("swr_init error:%d,%s\n", ret, AvErrorString(ret));
+		return false;
+	}
+
+	audio_in_frame_ = av_frame_alloc();
+	audio_out_frame_ = av_frame_alloc();
+	audio_resampled_frame_ = av_frame_alloc();
+	if (audio_in_frame_ == nullptr || audio_resampled_frame_ == nullptr || audio_out_frame_ == nullptr)
+	{
+		printf("src_audio_frame failed\n");
+		return false;
+	}
+
+	audio_out_frame_->ch_layout = output_aec_->ch_layout;
+	audio_out_frame_->sample_rate = output_aec_->sample_rate;
+	audio_out_frame_->format = output_aec_->sample_fmt;
+	audio_out_frame_->nb_samples = output_aec_->frame_size;//AAC：通常每个帧有 1024 或 2048 个采样点（视编码器配置而定）。
+	ret = av_frame_get_buffer(audio_out_frame_, 0);
+	if (ret < 0)
+	{
+		printf("av_frame_get_buffer error %d,%s", ret, AvErrorString(ret));
+		return false;
+	}
+
+	audio_resampled_frame_->ch_layout = output_aec_->ch_layout;
+	audio_resampled_frame_->sample_rate = output_aec_->sample_rate;
+	audio_resampled_frame_->format = output_aec_->sample_fmt;
+	audio_resampled_frame_->nb_samples = output_aec_->frame_size;//AAC：通常每个帧有 1024 或 2048 个采样点（视编码器配置而定）。
+
+	//初始化音频 FIFO 缓冲池
+	audio_fifo_ = av_audio_fifo_alloc(output_aec_->sample_fmt, output_aec_->ch_layout.nb_channels, 1);
+	if (audio_fifo_ == nullptr)
+	{
+		std::cerr << "Could not allocate FIFO" << std::endl;
+		return false;
+	}
+
+	return true;
+}
+
+void CFFHandle::FreeAudioPkg()
+{
+	if (audio_swr_context_ == nullptr)//音频重采样
+	{
+		swr_free(&audio_swr_context_);
+		audio_swr_context_ = nullptr;
+	}
+
+	if (audio_out_pkt_ == nullptr)
+	{
+		av_packet_free(&audio_out_pkt_);
+		audio_out_pkt_ = nullptr;
+	}
+
+	if (audio_in_frame_ != nullptr)
+	{
+		av_frame_free(&audio_in_frame_);
+		audio_in_frame_ = nullptr;
+	}
+	if (audio_out_frame_ != nullptr)
+	{
+		av_frame_free(&audio_out_frame_);
+		audio_out_frame_ = nullptr;
+	}
+	if (audio_resampled_frame_ != nullptr)
+	{
+		av_frame_free(&audio_resampled_frame_);
+		audio_resampled_frame_ = nullptr;
+	}
+
+	if (audio_fifo_ != nullptr)
+	{
+		av_audio_fifo_free(audio_fifo_);
+		audio_fifo_ = nullptr;
+	}
+
+}
+
 int CFFHandle::DecodePacket(AVCodecContext* dec, AVPacket* pkt, AVFrame* frame, DecodePacketHandler handler)
 {
 	int ret = 0;
@@ -391,15 +587,9 @@ int CFFHandle::EncodeFrame(AVCodecContext* enc, const AVFrame* frame, AVPacket* 
 
 CFFHandle::~CFFHandle()
 {
-	if (video_sws_context_ != nullptr)
-	{
-		sws_freeContext(video_sws_context_);
-	}
 
-	if (audio_swr_context_ != nullptr)
-	{
-		swr_free(&audio_swr_context_);
-	}
+	FreeVedioPkg();
+	FreeAudioPkg();
 }
 
 bool CFFHandle::HandlePakege()
@@ -415,187 +605,98 @@ bool CFFHandle::HandlePakege()
 	if (output_fmt_ctx_->pb != nullptr)
 		avio_flush(output_fmt_ctx_->pb);
 
+	if (!InitVedioPkg())
+		return false;
 
-	AVPacket* in_pkt = av_packet_alloc();
-	AVPacket* out_vedio_pkt = av_packet_alloc();
-	AVPacket* out_audio_pkt = av_packet_alloc();
+	if (!InitAudioPkg())
+		return false;
 
-	//设置数据转换参数
-	//将原始数据转为RGB格式
-	video_sws_context_ = sws_getContext(
-		input_vdec_->width, input_vdec_->height, input_vdec_->pix_fmt,//源格式
-		output_vec_->width, output_vec_->height, output_vec_->pix_fmt,//目标格式
-		SWS_BICUBIC, NULL, NULL, NULL);
-
-	//分配空间 
-	//一帧图像数据大小
-	int numBytes = av_image_get_buffer_size(output_vec_->pix_fmt, output_vec_->width, output_vec_->height, 1);
-	unsigned char* outBuffer = (unsigned char*)av_malloc(numBytes * sizeof(unsigned char));
-
-	AVFrame* src_vedio_frame = av_frame_alloc();
-	AVFrame* dst_vedio_frame = av_frame_alloc();
-
-	//会将dstFrame的数据按指定格式自动"关联"到outBuffer  即dstFrame中的数据改变了out_buffer中的数据也会相应的改变
-	av_image_fill_arrays(dst_vedio_frame->data, dst_vedio_frame->linesize, outBuffer, output_vec_->pix_fmt, output_vec_->width, output_vec_->height, 1);
-	dst_vedio_frame->format = output_vec_->pix_fmt;
-	dst_vedio_frame->width = output_vec_->width;
-	dst_vedio_frame->height = output_vec_->height;
-
-	auto handle_vedio_frame = [&](AVFrame* src_frame) ->int
+	auto handle_vedio_frame = [&, this](AVFrame* src_frame) ->int {
+		//转换
+		ret = sws_scale(video_sws_context_, src_frame->data, src_frame->linesize, 0, input_vdec_->height, video_out_frame_->data, video_out_frame_->linesize);
+		if (ret < 0)
 		{
-			//转换
-			sws_scale(video_sws_context_, src_frame->data, src_frame->linesize, 0, input_vdec_->height, dst_vedio_frame->data, dst_vedio_frame->linesize);
+			printf("sws_scale failed %d,%s\n", ret, AvErrorString(ret));
+			return 0;
+		}
+		//转换 PTS
+		video_out_frame_->pts = av_rescale_q(vedio_in_frame_->pts,
+			input_vst_->time_base, // 原始时间基准
+			output_vec_->time_base);  // 目标时间基准
 
-			//转换 PTS
-			dst_vedio_frame->pts = av_rescale_q(src_vedio_frame->pts,
-				input_vst_->time_base, // 原始时间基准
-				output_vec_->time_base);  // 目标时间基准
+		EncodeFrame(output_vec_, video_out_frame_, video_out_pkt_, [&](AVPacket* out_pkt)->int {
 
-			EncodeFrame(output_vec_, dst_vedio_frame, out_vedio_pkt, [&](AVPacket* out_pkt)->int
+			av_packet_rescale_ts(out_pkt, output_vec_->time_base, output_vst_->time_base);
+			out_pkt->stream_index = output_vst_->index;
+			out_pkt->pos = -1;
+
+			// 写入数据包到文件
+			out_pkt->stream_index = output_vst_->index;
+			ret = av_interleaved_write_frame(output_fmt_ctx_, out_pkt);
+			if (ret < 0)
+			{
+				printf("av_interleaved_write_frame error:%d,%s\n", ret, AvErrorString(ret));
+			}
+
+			return 0;
+
+			});
+
+
+		return 0;
+		};
+
+
+	auto handle_audio_frame = [&, this](AVFrame* src_frame)->int {
+
+		// 进行转换
+		int ret = swr_convert_frame(audio_swr_context_, audio_resampled_frame_, src_frame);
+		if (ret < 0)
+		{
+			// 错误处理
+			printf("swr_convert_frame error %d %s\n", ret, AvErrorString(ret));
+			return 0;
+		}
+
+		//将重采样后的可变长度数据写入 FIFO
+		if (av_audio_fifo_write(audio_fifo_, (void**)audio_resampled_frame_->data, audio_resampled_frame_->nb_samples) < audio_resampled_frame_->nb_samples)
+		{
+			std::cerr << "Could not write data to FIFO" << std::endl;
+			return 0;
+		}
+
+		//从 FIFO 中循环读取固定长度(1024) 的数据块并编码
+		while (av_audio_fifo_size(audio_fifo_) >= output_aec_->frame_size)
+		{
+			// 从 FIFO 读取 1024 个样本
+			if (av_audio_fifo_read(audio_fifo_, (void**)audio_out_frame_->data, output_aec_->frame_size) < output_aec_->frame_size)
+			{
+				std::cerr << "Could not read data from FIFO" << std::endl;
+				continue;
+			}
+
+			EncodeFrame(output_aec_, audio_out_frame_, audio_out_pkt_, [&](AVPacket* out_pkt)->int {
+
+				av_packet_rescale_ts(out_pkt, output_aec_->time_base, output_ast_->time_base);
+				out_pkt->pos = -1;
+
+				// 写入数据包到文件
+				out_pkt->stream_index = output_ast_->index;
+				ret = av_interleaved_write_frame(output_fmt_ctx_, out_pkt);
+				if (ret < 0)
 				{
+					printf("av_interleaved_write_frame error:%d,%s\n", ret, AvErrorString(ret));
+				}
 
-					av_packet_rescale_ts(out_pkt, output_vec_->time_base, output_vst_->time_base);
-					out_pkt->stream_index = output_vst_->index;
-					out_pkt->pos = -1;
-
-					// 写入数据包到文件
-					out_pkt->stream_index = output_vst_->index;
-					ret = av_interleaved_write_frame(output_fmt_ctx_, out_pkt);
-					if (ret < 0)
-					{
-						printf("av_interleaved_write_frame error:%d,%s\n", ret, AvErrorString(ret));
-					}
-
-					return 0;
+				return 0;
 
 				});
 
-
-			return 0;
+		}
+		return 0;
 		};
 
-
-
-	if (input_adec_->ch_layout.u.mask == 0)
-	{
-		AVChannelLayout ch_layout = {  };
-		av_channel_layout_default(&ch_layout, input_adec_->ch_layout.nb_channels);
-		input_adec_->ch_layout = ch_layout;
-	}
-
-	ret = swr_alloc_set_opts2(&audio_swr_context_,
-		&output_aec_->ch_layout,
-		output_aec_->sample_fmt,
-		output_aec_->sample_rate,
-		&input_adec_->ch_layout,
-		input_adec_->sample_fmt,// PCM源文件的采样格式
-		input_adec_->sample_rate, 0, NULL);
-	if (ret < 0)
-	{
-		printf("swr_alloc_set_opts2 error:%d,%s\n", ret, AvErrorString(ret));
-		return false;
-	}
-	ret = swr_init(audio_swr_context_);
-	if (ret < 0)
-	{
-		printf("swr_init error:%d,%s\n", ret, AvErrorString(ret));
-		return false;
-	}
-
-	AVFrame* src_audio_frame = av_frame_alloc();
-
-
-	AVFrame* dst_audio_frame = av_frame_alloc();
-
-	dst_audio_frame->ch_layout = output_aec_->ch_layout;
-	dst_audio_frame->sample_rate = output_aec_->sample_rate;
-	dst_audio_frame->format = output_aec_->sample_fmt;
-	dst_audio_frame->nb_samples = output_aec_->frame_size;//AAC：通常每个帧有 1024 或 2048 个采样点（视编码器配置而定）。
-	ret = av_frame_get_buffer(dst_audio_frame, 0);
-	if (ret < 0)
-	{
-		printf("av_frame_get_buffer error %d,%s", ret, AvErrorString(ret));
-
-	}
-
-	AVFrame* resampled_audio_frame = av_frame_alloc();
-	resampled_audio_frame->ch_layout = output_aec_->ch_layout;
-	resampled_audio_frame->sample_rate = output_aec_->sample_rate;
-	resampled_audio_frame->format = output_aec_->sample_fmt;
-	resampled_audio_frame->nb_samples = output_aec_->frame_size;//AAC：通常每个帧有 1024 或 2048 个采样点（视编码器配置而定）。
-
-
-
-	//初始化音频 FIFO 缓冲池
-	AVAudioFifo* fifo = av_audio_fifo_alloc(output_aec_->sample_fmt, output_aec_->ch_layout.nb_channels, 1);
-	if (!fifo)
-	{
-		std::cerr << "Could not allocate FIFO" << std::endl;
-		return false;
-	}
-
-	auto handle_audio_frame = [&](AVFrame* src_frame)
-		{
-
-			// 进行转换
-			int ret = swr_convert_frame(audio_swr_context_, resampled_audio_frame, src_frame);
-			if (ret < 0)
-			{
-				// 错误处理
-				printf("swr_convert_frame error %d %s", ret, AvErrorString(ret));
-				return 0;
-			}
-
-			//将重采样后的可变长度数据写入 FIFO
-			if (av_audio_fifo_write(fifo, (void**)resampled_audio_frame->data, resampled_audio_frame->nb_samples) < resampled_audio_frame->nb_samples)
-			{
-				std::cerr << "Could not write data to FIFO" << std::endl;
-				return 0;
-			}
-
-			//从 FIFO 中循环读取固定长度(1024) 的数据块并编码
-			while (av_audio_fifo_size(fifo) >= output_aec_->frame_size)
-			{
-
-
-				// 从 FIFO 读取 1024 个样本
-				if (av_audio_fifo_read(fifo, (void**)dst_audio_frame->data, output_aec_->frame_size) < output_aec_->frame_size)
-				{
-					std::cerr << "Could not read data from FIFO" << std::endl;
-					continue;
-				}
-				////转换 PTS
-				//dst_audio_frame->pts = av_rescale_q(src_frame->pts,
-				//	input_ast_->time_base, // 原始时间基准
-				//	output_aec_->time_base);  // 目标时间基准
-
-
-				EncodeFrame(output_aec_, dst_audio_frame, out_audio_pkt, [&](AVPacket* out_pkt)->int
-					{
-
-						av_packet_rescale_ts(out_pkt, output_aec_->time_base, output_ast_->time_base);
-						out_pkt->stream_index = output_ast_->index;
-						out_pkt->pos = -1;
-
-						// 写入数据包到文件
-						out_pkt->stream_index = output_ast_->index;
-						ret = av_interleaved_write_frame(output_fmt_ctx_, out_pkt);
-						if (ret < 0)
-						{
-							printf("av_interleaved_write_frame error:%d,%s\n", ret, AvErrorString(ret));
-						}
-
-						return 0;
-
-					});
-
-			}
-
-
-
-
-		};
-
+	AVPacket* in_pkt = av_packet_alloc();
 	while (is_running_)
 	{
 		ret = av_read_frame(input_fmt_ctx_, in_pkt);
@@ -603,7 +704,6 @@ bool CFFHandle::HandlePakege()
 		{
 			if (ret == AVERROR_EOF)
 			{
-				//
 				printf("av_read_frame eof:%d,%s\n", ret, AvErrorString(ret));
 			}
 			else
@@ -616,11 +716,7 @@ bool CFFHandle::HandlePakege()
 
 		if (in_pkt->stream_index == input_video_stream_index_)
 		{
-
-			DecodePacket(input_vdec_, in_pkt, src_vedio_frame, handle_vedio_frame);
-
-			//std::this_thread::sleep_for(std::chrono::milliseconds(25));
-
+			DecodePacket(input_vdec_, in_pkt, vedio_in_frame_, handle_vedio_frame);
 		}
 		else if (in_pkt->stream_index == input_audio_stream_index_)
 		{
@@ -633,7 +729,7 @@ bool CFFHandle::HandlePakege()
 			//	printf("av_interleaved_write_frame error:%d,%s\n", ret, AvErrorString(ret));
 			//}
 
-			DecodePacket(input_adec_, in_pkt, src_audio_frame, handle_audio_frame);
+			DecodePacket(input_adec_, in_pkt, audio_in_frame_, handle_audio_frame);
 		}
 
 		av_packet_unref(in_pkt);//av_read_frame 获取的 需要av_packet_unref
@@ -642,16 +738,17 @@ bool CFFHandle::HandlePakege()
 
 	/* flush the decoders */
 	if (output_vec_ != nullptr)
-		DecodePacket(output_vec_, NULL, src_vedio_frame, handle_vedio_frame);
+		DecodePacket(output_vec_, nullptr, vedio_in_frame_, handle_vedio_frame);
+
+	if (output_aec_ != nullptr)
+		DecodePacket(input_adec_, nullptr, audio_in_frame_, handle_audio_frame);
 
 	//写输出文件尾
 	ret = av_write_trailer(output_fmt_ctx_);
 
-	av_frame_free(&src_vedio_frame);
-	av_frame_free(&dst_vedio_frame);
+
 	av_packet_free(&in_pkt);
-	av_packet_free(&out_vedio_pkt);
-	av_free(outBuffer);
+
 
 	return true;
 }

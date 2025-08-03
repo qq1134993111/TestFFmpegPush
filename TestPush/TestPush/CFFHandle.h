@@ -70,8 +70,24 @@ public:
 	~CFFHandle();
 	bool HandlePakege();
 	bool is_running_ = false;
+protected:
+	AVPacket* video_out_pkt_ = nullptr;
+	AVFrame* vedio_in_frame_ = nullptr;
+	AVFrame* video_out_frame_ = nullptr;
+	unsigned char* vedio_out_buffer_ = nullptr;
 	SwsContext* video_sws_context_ = nullptr;
-	SwrContext* audio_swr_context_ = nullptr;//“Ù∆µ÷ÿ≤…—˘
+	bool InitVedioPkg();
+	void FreeVedioPkg();
+
+
+	AVPacket* audio_out_pkt_ = nullptr;
+	AVFrame* audio_in_frame_ = nullptr;
+	AVFrame* audio_out_frame_ = nullptr;
+	AVFrame* audio_resampled_frame_ = nullptr;
+	SwrContext* audio_swr_context_ = nullptr;
+	AVAudioFifo* audio_fifo_ = nullptr;
+	bool InitAudioPkg();
+	void FreeAudioPkg();
 private:
 	using DecodePacketHandler = std::function<int(AVFrame* frame)>;
 	int DecodePacket(AVCodecContext* dec, AVPacket* pkt, AVFrame* frame, DecodePacketHandler handler);
