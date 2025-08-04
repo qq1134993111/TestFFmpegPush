@@ -83,6 +83,7 @@ bool PushCameraRtsp::InitOutput(const std::string& out_uri, const std::string& o
 	// also used in the CLI ffmpeg utility: https://github.com/FFmpeg/FFmpeg/blob/7d4fe0c5cb9501efc4a434053cec85a70cae156e/fftools/ffmpeg.c#L3058
 	// and https://github.com/FFmpeg/FFmpeg/blob/7d4fe0c5cb9501efc4a434053cec85a70cae156e/fftools/ffmpeg.c#L3364
 	output_vst_.setTimeBase(av::Rational{ 1,fps_ });
+	output_vst_.raw()->codecpar->codec_tag = 0;
 
 
 
@@ -117,7 +118,8 @@ bool PushCameraRtsp::InitOutput(const std::string& out_uri, const std::string& o
 		return 1;
 	}
 	output_ast_ = output_ctx_.addStream(output_aec_);
-	//output_ast_.setTimeBase(output_aec_.timeBase());
+	output_ast_.setTimeBase(output_aec_.timeBase());
+	output_ast_.raw()->codecpar->codec_tag = 0;
 
 
 	output_ctx_.openOutput(out_uri, ec);

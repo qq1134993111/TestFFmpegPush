@@ -252,7 +252,7 @@ bool CFFOutput::InitOutput(const std::string& out_uri, const std::string& out_fo
 	output_vst_->r_frame_rate = AVRational{ fps_,1 };
 	output_vst_->avg_frame_rate = AVRational{ fps_,1 };
 	output_vst_->time_base = AVRational{ 1,fps_ };
-
+	output_vst_->codecpar->codec_tag = 0;
 
 
 
@@ -270,7 +270,7 @@ bool CFFOutput::InitOutput(const std::string& out_uri, const std::string& out_fo
 	output_aec_->ch_layout = ch_layout;
 	output_aec_->bit_rate = 128000;
 	output_aec_->time_base = AVRational{ 1,44100 };
-	output_aec_->flags |= (output_fmt_ctx_->flags & AVFMT_GLOBALHEADER) ? AV_CODEC_FLAG_GLOBAL_HEADER : 0;
+	
 
 	ret = avcodec_open2(output_aec_, nullptr, nullptr);
 	if (ret < 0)
@@ -293,7 +293,7 @@ bool CFFOutput::InitOutput(const std::string& out_uri, const std::string& out_fo
 		return false;
 	}
 	output_ast_->time_base = input_ast_->time_base;
-
+	output_ast_->codecpar->codec_tag = 0;
 
 	if (!(output_fmt_ctx_->oformat->flags & AVFMT_NOFILE))
 	{
