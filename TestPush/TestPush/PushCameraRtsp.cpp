@@ -109,7 +109,7 @@ bool PushCameraRtsp::InitOutput(const std::string& out_uri, const std::string& o
 	output_aec_.setBitRate(128000); // 设置一个合适的比特率，如 128kbps
 	output_aec_.setTimeBase(av::Rational(1, input_adec_.sampleRate())); // 使用采样率作为时间基
 
-	output_aec_.raw()->thread_count = 1;//设置为0，让FFmpeg自动决定最佳线程数 (推荐)
+	//output_aec_.raw()->thread_count = 0;//设置为0，让FFmpeg自动决定最佳线程数 (推荐) 音频不需要
 	output_aec_.open(ec);
 	if (ec)
 	{

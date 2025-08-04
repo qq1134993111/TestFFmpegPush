@@ -24,6 +24,7 @@ bool PushCameraBase::InitInput(const std::string& in_uri, const std::string& in_
 	// 同样，"10M" 的写法也经常被支持
 	in_format_options.set("probesize", "10485760");
 	in_format_options.set("video_size", "640x480");
+	//in_format_options.set("use_wallclock_as_timestamps", "1");  //忽略输入源自带的时间戳，使用系统当前时间作为 PTS/DTS，适用于实时流同步问题. 
 
 	std::error_code ec;
 	input_ctx_.openInput(in_uri, in_format_options, av::InputFormat(in_format_name), ec);
@@ -70,6 +71,7 @@ bool PushCameraBase::InitInput(const std::string& in_uri, const std::string& in_
 
 		std::cerr << "PTR: " << (void*)input_vdec_.raw()->codec << std::endl;
 		input_vdec_.raw()->thread_count = 0;//设置为0，让FFmpeg自动决定最佳线程数 (推荐)
+		input_vdec_.raw()->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
 		input_vdec_.open(av::Codec(), ec);
 		if (ec)
 		{
@@ -91,7 +93,7 @@ bool PushCameraBase::InitInput(const std::string& in_uri, const std::string& in_
 
 		std::cerr << "PTR: " << (void*)input_adec_.raw()->codec << std::endl;
 
-		input_adec_.raw()->thread_count = 0;//设置为0，让FFmpeg自动决定最佳线程数 (推荐)
+		//input_adec_.raw()->thread_count = 0;//设置为0，让FFmpeg自动决定最佳线程数 (推荐) 音频不需要
 		input_adec_.open(av::Codec(), ec);
 		if (ec)
 		{
@@ -365,7 +367,7 @@ void PushCameraBase::SetH264EncoderOption(av::Dictionary& x264_opts, av::VideoEn
 	//thread_count：线程数，0 表示自动
 	//thread_type：FRAME/SLICE 多线程类型
 	vec.raw()->thread_count = 0;
-	vec.raw()->thread_type = FF_THREAD_FRAME;
+	vec.raw()->thread_type = FF_THREAD_FRAME| FF_THREAD_SLICE;
 }
 
 

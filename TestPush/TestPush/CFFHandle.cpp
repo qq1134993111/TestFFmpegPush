@@ -47,6 +47,7 @@ bool CFFInput::InitInput(const std::string& in_uri, const std::string& in_format
 	AVDictionary* options = nullptr;
 	//av_dict_set(&options, "rtbufsize", "30412800", 0);//默认大小3041280
 	//av_dict_set(&options, "framerate", "30", 0);
+	//av_dict_set(&options, "use_wallclock_as_timestamps", "1", 0);// 设置使用系统时间戳
 
 	//打开输入文件，获取封装格式相关信息
 	auto ret = avformat_open_input(&input_fmt_ctx_, in_uri.c_str(), input_format, &options);
@@ -116,6 +117,8 @@ bool CFFInput::InitInput(const std::string& in_uri, const std::string& in_format
 
 		input_vdec_->time_base = input_vst_->time_base;
 
+		input_vdec_->thread_count = 0;
+		input_vdec_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
 		ret = avcodec_open2(input_vdec_, nullptr, nullptr);
 		if (ret < 0)
 		{
@@ -220,6 +223,8 @@ bool CFFOutput::InitOutput(const std::string& out_uri, const std::string& out_fo
 	av_dict_set(&x264_options, "maxrate", "6000k", 0);
 	av_dict_set(&x264_options, "bufsize", "6000k", 0);
 	av_dict_set(&x264_options, "profile", "main", 0);
+	output_vec_->thread_count = 0;
+	output_vec_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
 
 	int ret = avcodec_open2(output_vec_, nullptr, &x264_options);
 	av_dict_free(&x264_options);//使用完释放options

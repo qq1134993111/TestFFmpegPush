@@ -107,10 +107,13 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>Crypt32.lib
+;Iphlpapi.lib;ws2_32.lib;wsock32.lib;strmiids.lib;Shlwapi.lib;vfw32.lib;Ole32.lib;Oleaut32.lib;mfplat.lib;mfuuid.lib;secur32.lib;bcrypt.lib;winmm.lib;cfgmgr32.lib;setupapi.lib;version.lib;imm32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -130,12 +133,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="CFFInput.cpp" />
     <ClCompile Include="ffmpgeStramTest.cpp" />
     <ClCompile Include="RtmpPush.cpp" />
     <ClCompile Include="RtspPush.cpp" />
     <ClCompile Include="TestFFmpegPush.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CFFInput.h" />
     <ClInclude Include="ffmpgeStramTest.h" />
     <ClInclude Include="RtmpPush.h" />
     <ClInclude Include="RtspPush.h" />
