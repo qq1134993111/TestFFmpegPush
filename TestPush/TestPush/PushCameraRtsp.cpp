@@ -173,8 +173,11 @@ bool PushCameraRtsp::HandlePacket()
 	//
 // PROCESS
 //
+// 	  
+    // 在全局或类成员中增加一个变量，并初始化为特殊值
+	int64_t first_packet_pts = AV_NOPTS_VALUE;
 	// 在主循环开始前，记录整个推流的起始时间（使用单调时钟）
-	int64_t stream_start_time = av_gettime();
+	int64_t stream_start_time = 0;
 
 	std::error_code ec;
 	output_ctx_.writeHeader();
@@ -198,8 +201,34 @@ bool PushCameraRtsp::HandlePacket()
 		if (pkt.streamIndex() == input_video_stream_index_)
 		{
 
+			// 1. 如果是第一帧，捕获它的PTS作为我们的“零点”
+			if (first_packet_pts == AV_NOPTS_VALUE) 
+			{
+				first_packet_pts = pkt.raw()->pts;
+				// 同时，记录下当前真实时间作为我们发送时钟的“零点”
+				stream_start_time = av_gettime();
+			}
+			// 2. 计算当前包相对于第一包的PTS偏移量
+			int64_t pts_offset = pkt.raw()->pts - first_packet_pts;
+
+			// 3. 将这个干净的偏移量，从输入流的时间基，转换为微秒
+			//    以便用于我们的发送时钟逻辑
+			int64_t pts_offset_us = av_rescale_q(pts_offset,input_vst_.timeBase().getValue(), {1, 1000000});
+
+			// 4. 计算目标发送时间 
+			int64_t target_send_time_us = stream_start_time + pts_offset_us;
+			int64_t now_us = av_gettime();
+
+			if (target_send_time_us > now_us)
+			{
+				av_usleep(target_send_time_us - now_us);
+			}		
+
 			std::clog << "Read packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " ,seconds " << pkt.pts().seconds() << " ,timeBase " << pkt.timeBase() << " , st: " << pkt.streamIndex() << std::endl;
 
+			av::Timestamp tsp_offset_us = { pts_offset_us, {1, 1000000} };
+			pkt.setPts(tsp_offset_us);//设置pts，使用自己定义的时间
+			
 			// DECODING
 			auto inpFrame = input_vdec_.decode(pkt, ec);//inpFrame的pts为input_vdec_ 解码器上的timebase
 
@@ -266,30 +295,14 @@ bool PushCameraRtsp::HandlePacket()
 			opkt.setTimeBase(output_vst_.timeBase());//opkt上的pts设置为output_vst_流上的timebase
 			std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " ,seconds=" << opkt.pts().seconds() << " ,timeBase " << opkt.timeBase() << " , st: " << opkt.streamIndex() << std::endl;
 
-			// ... 经过解码、编码，得到了 pkt_out ...
-            // 此时 pkt_out 的 pts 已经根据源文件的时间戳转换好了，
-            // 并且 rescale 到了 out_stream->time_base
-  
-			// 1. 获取当前包的PTS（单位是输出流的时间基）
-			int64_t pts_in_dest_tb = opkt.raw()->pts;
 
-			// 2. 将这个PTS转换为真实的时间单位（比如微秒），得到它相对 stream_start_time 的偏移量
-			int64_t pts_offset_us = av_rescale_q(pts_in_dest_tb, output_vst_.timeBase().getValue(), { 1, 1000000 });
+			//opkt.raw()->pts = av_rescale_q(pts_offset,input_vst_.timeBase().getValue(), // 源时间基
+	  //                                     output_vst_.timeBase().getValue() // 目标时间基
+			//                              );
+			//opkt.raw()->dts = opkt.raw()->pts; // 对于直播流通常如此
 
-			// 3. 计算这个包理论上应该在哪个真实时间点被发送
-			int64_t target_send_time_us = stream_start_time + pts_offset_us;
+			std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " ,seconds=" << opkt.pts().seconds() << " ,timeBase " << opkt.timeBase() << " , st: " << opkt.streamIndex() << std::endl;
 
-			// 4. 获取当前的真实时间
-			int64_t now_us = av_gettime();
-
-			// 5. 如果当前时间早于目标发送时间，就 sleep
-			if (target_send_time_us > now_us) 
-			{
-				int64_t delay_us = target_send_time_us - now_us;
-				// 使用微秒级的 sleep
-				
-				std::this_thread::sleep_for(std::chrono::microseconds(delay_us));
-			}
 
 			// 现在，以接近实时的速率发送数据包
 			output_ctx_.writePacket(opkt, ec);
