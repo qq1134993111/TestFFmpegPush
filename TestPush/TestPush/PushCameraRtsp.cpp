@@ -17,11 +17,21 @@
 #include "avcpp/formatcontext.h"
 #include "avcpp/codeccontext.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/samplefmt.h>
+#include <libavutil/time.h>
 #include <libavformat/avformat.h>
+
+#ifdef __cplusplus
+}
+#endif
+
 
 
 bool PushCameraRtsp::InitOutput(const std::string& out_uri, const std::string& out_format_name, av::Dictionary out_format_options /*= {}*/)
@@ -163,13 +173,16 @@ bool PushCameraRtsp::HandlePacket()
 	//
 // PROCESS
 //
+	// 在主循环开始前，记录整个推流的起始时间（使用单调时钟）
+	int64_t stream_start_time = av_gettime();
+
 	std::error_code ec;
 	output_ctx_.writeHeader();
 	output_ctx_.flush();
 	while (is_running_.load(std::memory_order_relaxed))
 	{
 		// READING
-		av::Packet pkt = input_ctx_.readPacket(ec);
+		av::Packet pkt = input_ctx_.readPacket(ec); //pkt的pts为input_ctx_输入流上的time_base
 		if (ec)
 		{
 			std::clog << "Packet reading error: " << ec << ", " << ec.message() << std::endl;
@@ -185,10 +198,10 @@ bool PushCameraRtsp::HandlePacket()
 		if (pkt.streamIndex() == input_video_stream_index_)
 		{
 
-			std::clog << "Read packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " / " << pkt.pts().seconds() << " / " << pkt.timeBase() << " / st: " << pkt.streamIndex() << std::endl;
+			std::clog << "Read packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " ,seconds " << pkt.pts().seconds() << " ,timeBase " << pkt.timeBase() << " , st: " << pkt.streamIndex() << std::endl;
 
 			// DECODING
-			auto inpFrame = input_vdec_.decode(pkt, ec);
+			auto inpFrame = input_vdec_.decode(pkt, ec);//inpFrame的pts为input_vdec_ 解码器上的timebase
 
 			if (ec)
 			{
@@ -207,11 +220,12 @@ bool PushCameraRtsp::HandlePacket()
 				<< ", ref=" << inpFrame.isReferenced() << ":" << inpFrame.refCount() << "  type: " << inpFrame.pictureType() << std::endl;
 
 			// Change timebase
-			inpFrame.setTimeBase(output_vec_.timeBase());
+			inpFrame.setTimeBase(output_vec_.timeBase());//inpFrame上的pts 设置为output_vec_编码器上的timebase
 			inpFrame.setStreamIndex(output_vst_.index());
 			inpFrame.setPictureType();
 
-			//std::clog << "inpFrame: pts=" << inpFrame.pts() << " / " << inpFrame.pts().seconds() << " / " << inpFrame.timeBase() << ", " << inpFrame.width() << "x" << inpFrame.height() << ", size=" << inpFrame.size() << ", ref=" << inpFrame.isReferenced() << ":" << inpFrame.refCount() << " / type: " << inpFrame.pictureType() << std::endl;
+			std::clog << "inpFrame: pts=" << inpFrame.pts() << " ,seconds: " << inpFrame.pts().seconds() << " ,timeBase " << inpFrame.timeBase() 
+				<< ", " << inpFrame.width() << "x" << inpFrame.height() << ", size=" << inpFrame.size() << ", ref=" << inpFrame.isReferenced() << ":" << inpFrame.refCount() << " , type: " << inpFrame.pictureType() << std::endl;
 
 			if (inpFrame.pixelFormat() == AV_PIX_FMT_YUVJ422P)
 			{
@@ -220,7 +234,7 @@ bool PushCameraRtsp::HandlePacket()
 			}
 
 			// SCALE
-			auto outFrame = video_rescaler_.rescale(inpFrame, ec);
+			auto outFrame = video_rescaler_.rescale(inpFrame, ec);//outFrame的pts 和inpFrame一致
 			if (ec)
 			{
 				std::cerr << "Can't rescale frame: " << ec.value() << ", " << ec.message() << std::endl;
@@ -235,7 +249,7 @@ bool PushCameraRtsp::HandlePacket()
 			//outFrame.raw()->pkt_dts = outFrame.raw()->pts;
 
 			// ENCODE
-			av::Packet opkt = output_vec_.encode(outFrame, ec);
+			av::Packet opkt = output_vec_.encode(outFrame, ec);//opkt上的pts和outFrame一致
 			if (ec)
 			{
 				std::cerr << "Encoding error: " << ec.value() << "," << ec.message() << std::endl;
@@ -249,19 +263,46 @@ bool PushCameraRtsp::HandlePacket()
 
 			// output stream
 			opkt.setStreamIndex(output_vst_.index());
+			opkt.setTimeBase(output_vst_.timeBase());//opkt上的pts设置为output_vst_流上的timebase
+			std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " ,seconds=" << opkt.pts().seconds() << " ,timeBase " << opkt.timeBase() << " , st: " << opkt.streamIndex() << std::endl;
 
-			//std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " / " << opkt.pts().seconds() << " / " << opkt.timeBase() << " / st: " << opkt.streamIndex() << std::endl;
+			// ... 经过解码、编码，得到了 pkt_out ...
+            // 此时 pkt_out 的 pts 已经根据源文件的时间戳转换好了，
+            // 并且 rescale 到了 out_stream->time_base
+  
+			// 1. 获取当前包的PTS（单位是输出流的时间基）
+			int64_t pts_in_dest_tb = opkt.raw()->pts;
 
+			// 2. 将这个PTS转换为真实的时间单位（比如微秒），得到它相对 stream_start_time 的偏移量
+			int64_t pts_offset_us = av_rescale_q(pts_in_dest_tb, output_vst_.timeBase().getValue(), { 1, 1000000 });
+
+			// 3. 计算这个包理论上应该在哪个真实时间点被发送
+			int64_t target_send_time_us = stream_start_time + pts_offset_us;
+
+			// 4. 获取当前的真实时间
+			int64_t now_us = av_gettime();
+
+			// 5. 如果当前时间早于目标发送时间，就 sleep
+			if (target_send_time_us > now_us) 
+			{
+				int64_t delay_us = target_send_time_us - now_us;
+				// 使用微秒级的 sleep
+				
+				std::this_thread::sleep_for(std::chrono::microseconds(delay_us));
+			}
+
+			// 现在，以接近实时的速率发送数据包
 			output_ctx_.writePacket(opkt, ec);
 			if (ec)
 			{
 				std::cerr << "Error write packet: " << ec.value() << ", " << ec.message() << std::endl;
-				return false;
+				//return false;
 			}
+			
 		}
 		else if (pkt.streamIndex() == input_audio_stream_index_)
 		{
-			//std::clog << "Read audio packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " / " << pkt.pts().seconds() << " / " << pkt.timeBase() << " / st: " << pkt.streamIndex() << std::endl;
+			std::clog << "Read audio packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " / " << pkt.pts().seconds() << " / " << pkt.timeBase() << " / st: " << pkt.streamIndex() << std::endl;
 
 
 			// DECODING
@@ -346,7 +387,7 @@ bool PushCameraRtsp::HandlePacket()
 
 				opkt.setStreamIndex(output_ast_.index());
 
-				std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " / " << opkt.pts().seconds() << " / " << opkt.timeBase() << " / st: " << opkt.streamIndex() << std::endl;
+				std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " seconds " << opkt.pts().seconds() << " / " << opkt.timeBase() << " / st: " << opkt.streamIndex() << std::endl;
 
 				output_ctx_.writePacket(opkt, ec);
 				if (ec)
@@ -354,6 +395,7 @@ bool PushCameraRtsp::HandlePacket()
 					std::cerr << "Error write packet: " << ec << ", " << ec.message() << std::endl;
 					return false;
 				}
+				
 			}
 
 			// For the first packets samples can be empty: decoder caching
