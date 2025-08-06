@@ -69,7 +69,7 @@ bool CFFInput::InitInput(const std::string& in_uri, const std::string& in_format
 
 
 
-	for (int i = 0; i < input_fmt_ctx_->nb_streams; i++)
+	for (size_t i = 0; i < input_fmt_ctx_->nb_streams; i++)
 	{
 		auto this_stream = input_fmt_ctx_->streams[i];
 
@@ -185,125 +185,134 @@ CFFOutput::~CFFOutput()
 
 bool CFFOutput::InitOutput(const std::string& out_uri, const std::string& out_format_name)
 {
+	if (input_video_stream_index_ == -1 && input_audio_stream_index_ == -1)
+		return false;
+
 	const AVOutputFormat* out_fmt = av_guess_format(out_format_name.c_str(), out_uri.c_str(), nullptr);
 
 	output_fmt_ctx_ = avformat_alloc_context();
-
 	output_fmt_ctx_->oformat = out_fmt;
 	output_fmt_ctx_->url = av_strdup(out_uri.data());
 	output_fmt_ctx_->iformat = nullptr;
 
-	const AVCodec* vedio_encoder = avcodec_find_encoder(AV_CODEC_ID_H264);
-	if (vedio_encoder == nullptr)
+	int ret = 0;
+	if (input_video_stream_index_ != -1)
 	{
-		printf("avcodec_find_encoder AV_CODEC_ID_H264 failed\n");
-		return false;
-	}
-
-	output_vec_ = avcodec_alloc_context3(vedio_encoder);
-	if (output_vec_ == nullptr)
-	{
-		printf("avcodec_alloc_context3  failed\n");
-
-		return false;
-	}
-
-	output_vec_->width = input_vdec_->width;
-	output_vec_->height = input_vdec_->height;
-	output_vec_->pix_fmt = AV_PIX_FMT_YUV420P;
-	output_vec_->time_base = AVRational{ 1,fps_ };
-	output_vec_->bit_rate = 4000000;
-	output_vec_->flags |= (output_fmt_ctx_->flags & AVFMT_GLOBALHEADER) ? AV_CODEC_FLAG_GLOBAL_HEADER : 0;
-
-	output_vec_->level = 51;
-	output_vec_->gop_size = 30;
-	AVDictionary* x264_options = nullptr;
-	av_dict_set(&x264_options, "preset", "veryfast", 0);
-	av_dict_set(&x264_options, "tune", "zerolatency", 0);
-	av_dict_set(&x264_options, "maxrate", "6000k", 0);
-	av_dict_set(&x264_options, "bufsize", "6000k", 0);
-	av_dict_set(&x264_options, "profile", "main", 0);
-	output_vec_->thread_count = 0;
-	output_vec_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-
-	int ret = avcodec_open2(output_vec_, nullptr, &x264_options);
-	av_dict_free(&x264_options);//使用完释放options
-
-	if (ret < 0)
-	{
-		printf("avcodec_open2 failed.%d,%s\n", ret, AvErrorString(ret));
-		return false;
-	}
-
-	output_vst_ = avformat_new_stream(output_fmt_ctx_, nullptr);
-	if (output_vst_ == nullptr)
-	{
-		printf("avformat_new_stream failed\n");
-		return false;
-	}
-
-	ret = avcodec_parameters_from_context(output_vst_->codecpar, output_vec_);
-	if (ret != 0)
-	{
-		printf("avcodec_parameters_from_context error,%d,%s\n", ret, AvErrorString(ret));
-		return false;
-	}
-
-	output_vst_->r_frame_rate = AVRational{ fps_,1 };
-	output_vst_->avg_frame_rate = AVRational{ fps_,1 };
-	output_vst_->time_base = AVRational{ 1,fps_ };
-	output_vst_->codecpar->codec_tag = 0;
-
-
-
-	const AVCodec* codec = avcodec_find_encoder_by_name("aac");
-	if (!codec)
-	{
-		printf("Cannot find aac codec for audio.\n");
-		return false;
-	}
-	output_aec_ = avcodec_alloc_context3(codec);
-
-	output_aec_->sample_rate = 44100;
-	output_aec_->sample_fmt = AV_SAMPLE_FMT_FLTP;
-	AVChannelLayout ch_layout = AV_CHANNEL_LAYOUT_STEREO;
-	output_aec_->ch_layout = ch_layout;
-	output_aec_->bit_rate = 128000;
-	output_aec_->time_base = AVRational{ 1,44100 };
-	
-
-	ret = avcodec_open2(output_aec_, nullptr, nullptr);
-	if (ret < 0)
-	{
-		printf("Cannot open audio codec.%dm%s\n", ret, AvErrorString(ret));
-		return false;
-	}
-
-	output_ast_ = avformat_new_stream(output_fmt_ctx_, nullptr);
-	if (output_ast_ == nullptr)
-	{
-		printf("avformat_new_stream failed\n");
-		return false;
-	}
-
-	ret = avcodec_parameters_from_context(output_ast_->codecpar, output_aec_);
-	if (ret != 0)
-	{
-		printf("avcodec_parameters_from_context error,%d,%s\n", ret, AvErrorString(ret));
-		return false;
-	}
-	output_ast_->time_base = input_ast_->time_base;
-	output_ast_->codecpar->codec_tag = 0;
-
-	if (!(output_fmt_ctx_->oformat->flags & AVFMT_NOFILE))
-	{
-		//创建并初始化一个AVIOContext, 用以访问URL（outFilename）指定的资源
-		ret = avio_open(&output_fmt_ctx_->pb, out_uri.c_str(), AVIO_FLAG_WRITE);
-		if (ret < 0)
+		const AVCodec* vedio_encoder = avcodec_find_encoder(AV_CODEC_ID_H264);
+		if (vedio_encoder == nullptr)
 		{
-			printf("avio_open can't open output URL: %s.%d,%s\n", out_uri.c_str(), ret, AvErrorString(ret));
+			printf("avcodec_find_encoder AV_CODEC_ID_H264 failed\n");
 			return false;
 		}
+
+		output_vec_ = avcodec_alloc_context3(vedio_encoder);
+		if (output_vec_ == nullptr)
+		{
+			printf("avcodec_alloc_context3  failed\n");
+
+			return false;
+		}
+
+		output_vec_->width = input_vdec_->width;
+		output_vec_->height = input_vdec_->height;
+		output_vec_->pix_fmt = AV_PIX_FMT_YUV420P;
+		output_vec_->time_base = AVRational{ 1,fps_ };
+		output_vec_->bit_rate = 4000000;
+		output_vec_->flags |= (output_fmt_ctx_->flags & AVFMT_GLOBALHEADER) ? AV_CODEC_FLAG_GLOBAL_HEADER : 0;
+
+		output_vec_->level = 51;
+		output_vec_->gop_size = 30;
+		AVDictionary* x264_options = nullptr;
+		av_dict_set(&x264_options, "preset", "veryfast", 0);
+		av_dict_set(&x264_options, "tune", "zerolatency", 0);
+		av_dict_set(&x264_options, "maxrate", "6000k", 0);
+		av_dict_set(&x264_options, "bufsize", "6000k", 0);
+		av_dict_set(&x264_options, "profile", "main", 0);
+		output_vec_->thread_count = 0;
+		output_vec_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+
+		ret = avcodec_open2(output_vec_, nullptr, &x264_options);
+		av_dict_free(&x264_options);//使用完释放options
+
+		if (ret < 0)
+		{
+			printf("avcodec_open2 failed.%d,%s\n", ret, AvErrorString(ret));
+			return false;
+		}
+
+		output_vst_ = avformat_new_stream(output_fmt_ctx_, nullptr);
+		if (output_vst_ == nullptr)
+		{
+			printf("avformat_new_stream failed\n");
+			return false;
+		}
+
+		ret = avcodec_parameters_from_context(output_vst_->codecpar, output_vec_);
+		if (ret != 0)
+		{
+			printf("avcodec_parameters_from_context error,%d,%s\n", ret, AvErrorString(ret));
+			return false;
+		}
+
+		output_vst_->r_frame_rate = AVRational{ fps_,1 };
+		output_vst_->avg_frame_rate = AVRational{ fps_,1 };
+		output_vst_->time_base = AVRational{ 1,fps_ };
+		output_vst_->codecpar->codec_tag = 0;
+
+	}
+
+	if (input_audio_stream_index_ != -1)
+	{
+		const AVCodec* codec = avcodec_find_encoder_by_name("aac");
+		if (!codec)
+		{
+			printf("Cannot find aac codec for audio.\n");
+			return false;
+		}
+		output_aec_ = avcodec_alloc_context3(codec);
+
+		output_aec_->sample_rate = 44100;
+		output_aec_->sample_fmt = AV_SAMPLE_FMT_FLTP;
+		AVChannelLayout ch_layout = AV_CHANNEL_LAYOUT_STEREO;
+		output_aec_->ch_layout = ch_layout;
+		output_aec_->bit_rate = 128000;
+		output_aec_->time_base = AVRational{ 1,44100 };
+
+
+		ret = avcodec_open2(output_aec_, nullptr, nullptr);
+		if (ret < 0)
+		{
+			printf("Cannot open audio codec.%dm%s\n", ret, AvErrorString(ret));
+			return false;
+		}
+
+		output_ast_ = avformat_new_stream(output_fmt_ctx_, nullptr);
+		if (output_ast_ == nullptr)
+		{
+			printf("avformat_new_stream failed\n");
+			return false;
+		}
+
+		ret = avcodec_parameters_from_context(output_ast_->codecpar, output_aec_);
+		if (ret != 0)
+		{
+			printf("avcodec_parameters_from_context error,%d,%s\n", ret, AvErrorString(ret));
+			return false;
+		}
+		output_ast_->time_base = input_ast_->time_base;
+		output_ast_->codecpar->codec_tag = 0;
+
+		if (!(output_fmt_ctx_->oformat->flags & AVFMT_NOFILE))
+		{
+			//创建并初始化一个AVIOContext, 用以访问URL（outFilename）指定的资源
+			ret = avio_open(&output_fmt_ctx_->pb, out_uri.c_str(), AVIO_FLAG_WRITE);
+			if (ret < 0)
+			{
+				printf("avio_open can't open output URL: %s.%d,%s\n", out_uri.c_str(), ret, AvErrorString(ret));
+				return false;
+			}
+		}
+
 	}
 
 	//打印输出信息：长度 比特率 流格式等
@@ -315,6 +324,9 @@ bool CFFOutput::InitOutput(const std::string& out_uri, const std::string& out_fo
 
 bool CFFHandle::InitVedioPkg()
 {
+	if (input_video_stream_index_ == -1)
+		return true;
+
 	video_out_pkt_ = av_packet_alloc();
 	if (video_out_pkt_ == nullptr)
 	{
@@ -401,6 +413,9 @@ void CFFHandle::FreeVedioPkg()
 
 bool CFFHandle::InitAudioPkg()
 {
+	if (input_audio_stream_index_ == -1)
+		return true;
+
 	audio_out_pkt_ = av_packet_alloc();
 	if (audio_out_pkt_ == nullptr)
 	{
@@ -616,7 +631,17 @@ bool CFFHandle::HandlePakege()
 	if (!InitAudioPkg())
 		return false;
 
+	// 在全局或类成员中增加一个变量，并初始化为特殊值
+	int64_t first_packet_pts = AV_NOPTS_VALUE;
+	// 在主循环开始前，记录整个推流的起始时间（使用单调时钟）
+	int64_t stream_start_time = 0;
+
 	auto handle_vedio_frame = [&, this](AVFrame* src_frame) ->int {
+
+		printf("in_frame: pts=%lld , seconds=%.4f , timeBase=%d/%d , %dx%d ,pictureType=%d\n",
+			src_frame->pts, src_frame->pts * av_q2d(input_vdec_->time_base), input_vdec_->time_base.num, input_vdec_->time_base.den,
+			src_frame->width, src_frame->height, src_frame->pict_type);
+
 		//转换
 		ret = sws_scale(video_sws_context_, src_frame->data, src_frame->linesize, 0, input_vdec_->height, video_out_frame_->data, video_out_frame_->linesize);
 		if (ret < 0)
@@ -629,14 +654,21 @@ bool CFFHandle::HandlePakege()
 			input_vst_->time_base, // 原始时间基准
 			output_vec_->time_base);  // 目标时间基准
 
+		printf("out_frame: pts=%lld , seconds=%.4f , timeBase=%d/%d , %dx%d ,pictureType=%d\n",
+			video_out_frame_->pts, video_out_frame_->pts * av_q2d(output_vec_->time_base), output_vec_->time_base.num, output_vec_->time_base.den,
+			video_out_frame_->width, video_out_frame_->height, video_out_frame_->pict_type);
+
 		EncodeFrame(output_vec_, video_out_frame_, video_out_pkt_, [&](AVPacket* out_pkt)->int {
 
 			av_packet_rescale_ts(out_pkt, output_vec_->time_base, output_vst_->time_base);
 			out_pkt->stream_index = output_vst_->index;
 			out_pkt->pos = -1;
 
+			printf("Write video packet: pts=%lld , dts=%lld , seconds=%.4f , timeBase=%d/%d ,st=%d \n",
+				out_pkt->pts, out_pkt->dts, out_pkt->pts * av_q2d(output_vst_->time_base),
+				output_vst_->time_base.num, output_vst_->time_base.den, out_pkt->stream_index);
+
 			// 写入数据包到文件
-			out_pkt->stream_index = output_vst_->index;
 			ret = av_interleaved_write_frame(output_fmt_ctx_, out_pkt);
 			if (ret < 0)
 			{
@@ -653,6 +685,18 @@ bool CFFHandle::HandlePakege()
 
 
 	auto handle_audio_frame = [&, this](AVFrame* src_frame)->int {
+
+		auto func_get_layout_name = [](const AVFrame* frame)->char*
+			{
+				static char buf[128] = { 0 };
+				av_channel_layout_describe(&frame->ch_layout, buf, sizeof(buf));
+				return buf;
+			};
+
+		printf("Samples [in]: nb_samples:%d , ch:%d , freq:%d , name:%s , pts seconds:%.4f  \n",
+			src_frame->nb_samples, src_frame->ch_layout.nb_channels,
+			src_frame->sample_rate, func_get_layout_name(src_frame),
+			src_frame->pts * av_q2d(input_adec_->time_base));
 
 		// 进行转换
 		int ret = swr_convert_frame(audio_swr_context_, audio_resampled_frame_, src_frame);
@@ -680,13 +724,24 @@ bool CFFHandle::HandlePakege()
 				continue;
 			}
 
+			audio_out_frame_->pts = av_rescale_q(audio_out_frame_->pts, input_ast_->time_base, output_aec_->time_base);
+
+			printf("Samples [out]: nb_samples:%d , ch:%d , freq:%d , name:%s , pts seconds:%.4f  \n",
+				audio_out_frame_->nb_samples, audio_out_frame_->ch_layout.nb_channels,
+				audio_out_frame_->sample_rate, func_get_layout_name(audio_out_frame_),
+				audio_out_frame_->pts * av_q2d(output_aec_->time_base));
+
 			EncodeFrame(output_aec_, audio_out_frame_, audio_out_pkt_, [&](AVPacket* out_pkt)->int {
 
 				av_packet_rescale_ts(out_pkt, output_aec_->time_base, output_ast_->time_base);
+				out_pkt->stream_index = output_ast_->index;
 				out_pkt->pos = -1;
 
+				printf("Write audio packet: pts=%lld , dts=%lld , seconds=%.4f , timeBase=%d/%d ,st=%d \n",
+					out_pkt->pts, out_pkt->dts, out_pkt->pts * av_q2d(output_ast_->time_base),
+					output_ast_->time_base.num, output_ast_->time_base.den, out_pkt->stream_index);
+
 				// 写入数据包到文件
-				out_pkt->stream_index = output_ast_->index;
 				ret = av_interleaved_write_frame(output_fmt_ctx_, out_pkt);
 				if (ret < 0)
 				{
@@ -721,10 +776,61 @@ bool CFFHandle::HandlePakege()
 
 		if (in_pkt->stream_index == input_video_stream_index_)
 		{
+			if (in_pkt->pts != AV_NOPTS_VALUE)
+			{
+				printf("Read vedio packet: pts=%lld , dts=%lld , seconds=%.4f , timeBase=%d/%d ,st=%d \n",
+					in_pkt->pts, in_pkt->dts, in_pkt->pts * av_q2d(input_vst_->time_base),
+					input_vst_->time_base.num, input_vst_->time_base.den, in_pkt->stream_index);
+			}
+			else
+			{
+				printf("Read vedio packet: N/A (No PTS)\n");
+			}
+
+			// 1. 如果是第一帧，捕获它的PTS作为我们的“零点”
+			if (first_packet_pts == AV_NOPTS_VALUE)
+			{
+				first_packet_pts = in_pkt->pts;
+				// 同时，记录下当前真实时间作为我们发送时钟的“零点”
+				stream_start_time = av_gettime();
+			}
+			// 2. 计算当前包相对于第一包的PTS偏移量
+			int64_t pts_offset = in_pkt->pts - first_packet_pts;
+
+			// 3. 将这个干净的偏移量，从输入流的时间基，转换为微秒
+			//    以便用于我们的发送时钟逻辑
+			int64_t pts_offset_us = av_rescale_q(pts_offset, input_vst_->time_base, { 1, 1000000 });
+
+			// 4. 计算目标发送时间 
+			int64_t target_send_time_us = stream_start_time + pts_offset_us;
+			int64_t now_us = av_gettime();
+
+			if (target_send_time_us > now_us)
+			{
+				auto delay_us = target_send_time_us - now_us;
+				av_usleep((unsigned int)delay_us);
+			}
+			//设置pts，使用自己定义的时间
+			in_pkt->pts = av_rescale_q(pts_offset_us, { 1, 1000000 }, in_pkt->time_base);
+
+			printf("set new pts vedio packet: pts=%lld , dts=%lld , seconds=%.4f , timeBase=%d/%d ,st=%d \n",
+				in_pkt->pts, in_pkt->dts, in_pkt->pts * av_q2d(input_vst_->time_base),
+				input_vst_->time_base.num, input_vst_->time_base.den, in_pkt->stream_index);
+
 			DecodePacket(input_vdec_, in_pkt, vedio_in_frame_, handle_vedio_frame);
 		}
 		else if (in_pkt->stream_index == input_audio_stream_index_)
 		{
+			if (in_pkt->pts != AV_NOPTS_VALUE)
+			{
+				printf("Read audio packet: pts=%lld , dts=%lld , seconds=%.4f , timeBase=%d/%d ,st=%d \n",
+					in_pkt->pts, in_pkt->dts, in_pkt->pts * av_q2d(input_vst_->time_base),
+					input_vst_->time_base.num, input_vst_->time_base.den, in_pkt->stream_index);
+			}
+			else
+			{
+				printf("Read audio packet: nullptr or  N/A (No PTS)\n");
+			}
 			////pkt->time_base = input_ast_->time_base;
 			//av_packet_rescale_ts(in_pkt, input_ast_->time_base, output_ast_->time_base);
 			//in_pkt->stream_index = output_ast_->index;

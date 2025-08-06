@@ -19,6 +19,8 @@ public:
 	{
 		is_running_ = false;
 	}
+protected:
+	bool FlushEnd();
 private:
 	int16_t fps_ = 30;
 	std::atomic<bool> is_running_ = false;

@@ -36,116 +36,136 @@ extern "C" {
 
 bool PushCameraRtsp::InitOutput(const std::string& out_uri, const std::string& out_format_name, av::Dictionary out_format_options /*= {}*/)
 {
+	if (input_video_stream_index_ == -1 && input_audio_stream_index_ == -1)
+		return false;
+
 	av::OutputFormat  ofrmt;
 	ofrmt.setFormat(out_format_name, out_uri);
 
 	output_ctx_.setFormat(ofrmt);
 
-	av::Codec               ocodec = av::findEncodingCodec(/*ofrmt*/AV_CODEC_ID_H264);
-	if (ocodec.isNull())
-	{
-		std::cerr << "findEncodingCodec failed:" << ofrmt.name() << "," << ofrmt.longName() << "\n";
-		return false;
-	}
-
 	std::error_code ec;
 
+	if (input_video_stream_index_ != -1)
 	{
-		av::VideoEncoderContext video_encoder_context{ ocodec };
-		output_vec_ = std::move(video_encoder_context);
+		av::Codec               ocodec = av::findEncodingCodec(/*ofrmt*/AV_CODEC_ID_H264);
+		if (ocodec.isNull())
+		{
+			std::cerr << "findEncodingCodec failed:" << ofrmt.name() << "," << ofrmt.longName() << "\n";
+			return false;
+		}
+
+
+
+		{
+			av::VideoEncoderContext video_encoder_context{ ocodec };
+			output_vec_ = std::move(video_encoder_context);
+		}
+
+		AVPixelFormat used_pixel_format = AV_PIX_FMT_YUV420P;
+		IsSupportedPixelFormat(ocodec, used_pixel_format);
+
+		// Settings
+		output_vec_.setWidth(input_vdec_.width());
+		output_vec_.setHeight(input_vdec_.height());
+		output_vec_.setPixelFormat(used_pixel_format);
+		output_vec_.setTimeBase(av::Rational{ 1,fps_ });
+		//output_vec_.raw()->framerate = av::Rational{ fps_,1 };
+		output_vec_.setBitRate(4000000);
+		output_vec_.addFlags(output_ctx_.outputFormat().isFlags(AVFMT_GLOBALHEADER) ? AV_CODEC_FLAG_GLOBAL_HEADER : 0);
+
+		av::Dictionary x264_opts;
+		SetH264EncoderOption(x264_opts, output_vec_);
+		//其他rtsp参数
+		x264_opts.set("rtsp_transport", "tcp");  //强制使用 TCP 而非默认 UDP
+		//x264_opts.set("max_delay", "200000");   //设置最大接收延迟（200 ms）
+		//x264_opts.set("fflags", "nobuffer");    //禁用缓冲，降低延迟
+		//x264_opts.set("timeout", "5000000");    //网络阻塞等待上限（5 s）
+		//x264_opts.set("stimeout", "3000000");   //读包超时（3 s）
+		//x264_opts.set("analyzeduration", "1000000"); //流分析最大时长（1 s）
+		output_vec_.open(x264_opts, ec);
+		if (ec)
+		{
+			std::cerr << "Can't opent video encoder :" << ec.value() << "," << ec.message() << "\n";
+			return false;
+		}
+
+		IsSupportedFramerate(ocodec, input_vst_.frameRate());
+
+		output_vst_ = output_ctx_.addStream(output_vec_);
+		output_vst_.setFrameRate(av::Rational{ fps_,1 });
+		output_vst_.setAverageFrameRate(av::Rational{ fps_,1 }); // try to comment this out and look at the output of ffprobe or mpv
+		// it'll show 1k fps regardless of the real fps;
+		// see https://github.com/FFmpeg/FFmpeg/blob/7d4fe0c5cb9501efc4a434053cec85a70cae156e/libavformat/matroskaenc.c#L2659
+		// also used in the CLI ffmpeg utility: https://github.com/FFmpeg/FFmpeg/blob/7d4fe0c5cb9501efc4a434053cec85a70cae156e/fftools/ffmpeg.c#L3058
+		// and https://github.com/FFmpeg/FFmpeg/blob/7d4fe0c5cb9501efc4a434053cec85a70cae156e/fftools/ffmpeg.c#L3364
+		output_vst_.setTimeBase(av::Rational{ 1,fps_ });
+		output_vst_.raw()->codecpar->codec_tag = 0;
+
 	}
 
-	AVPixelFormat used_pixel_format = AV_PIX_FMT_YUV420P;
-	IsSupportedPixelFormat(ocodec, used_pixel_format);
-
-	// Settings
-	output_vec_.setWidth(input_vdec_.width());
-	output_vec_.setHeight(input_vdec_.height());
-	output_vec_.setPixelFormat(used_pixel_format);
-	output_vec_.setTimeBase(av::Rational{ 1,fps_ });
-	//output_vec_.raw()->framerate = av::Rational{ fps_,1 };
-	output_vec_.setBitRate(4000000);
-	output_vec_.addFlags(output_ctx_.outputFormat().isFlags(AVFMT_GLOBALHEADER) ? AV_CODEC_FLAG_GLOBAL_HEADER : 0);
-
-	av::Dictionary x264_opts;
-	SetH264EncoderOption(x264_opts, output_vec_);
-	//其他rtsp参数
-	x264_opts.set("rtsp_transport", "tcp");  //强制使用 TCP 而非默认 UDP
-	//x264_opts.set("max_delay", "200000");   //设置最大接收延迟（200 ms）
-	//x264_opts.set("fflags", "nobuffer");    //禁用缓冲，降低延迟
-	//x264_opts.set("timeout", "5000000");    //网络阻塞等待上限（5 s）
-	//x264_opts.set("stimeout", "3000000");   //读包超时（3 s）
-	//x264_opts.set("analyzeduration", "1000000"); //流分析最大时长（1 s）
-	output_vec_.open(x264_opts, ec);
-	if (ec)
+	if (input_audio_stream_index_ != -1)
 	{
-		std::cerr << "Can't opent video encoder :" << ec.value() << "," << ec.message() << "\n";
-		return false;
+
+		av::Codec acodec = av::findEncodingCodec("aac"); // 明确指定使用 AAC 编码器
+		if (acodec.isNull())
+		{
+			std::cerr << "Can't find aac encoder\n";
+			return false;
+		}
+
+		auto sampleFormats = acodec.supportedSampleFormats(); // 用于音频
+		auto sampleRates = acodec.supportedSamplerates();     // 用于音频
+		auto channelLayouts = acodec.supportedChannelLayouts(); // 用于音频
+
+		{
+			av::AudioEncoderContext audio_encoder_context{ acodec };
+			output_aec_ = std::move(audio_encoder_context);
+		}
+
+		output_aec_.setSampleRate(input_adec_.sampleRate());
+		output_aec_.setSampleFormat(AV_SAMPLE_FMT_FLTP); // 注意：AAC编码器可能不支持所有PCM格式，可能需要重采样
+		output_aec_.setChannelLayout(AV_CH_LAYOUT_STEREO);
+		output_aec_.setBitRate(128000); // 设置一个合适的比特率，如 128kbps
+		output_aec_.setTimeBase(av::Rational(1, input_adec_.sampleRate())); // 使用采样率作为时间基
+
+		//output_aec_.raw()->thread_count = 0;//设置为0，让FFmpeg自动决定最佳线程数 (推荐) 音频不需要
+		output_aec_.open(ec);
+		if (ec)
+		{
+			std::cerr << "Can't open audio encoder: " << ec.value() << "," << ec.message() << "\n";
+			return 1;
+		}
+		output_ast_ = output_ctx_.addStream(output_aec_);
+		output_ast_.setTimeBase(output_aec_.timeBase());
+		output_ast_.raw()->codecpar->codec_tag = 0;
+
+
+		output_ctx_.openOutput(out_uri, ec);
+		if (ec)
+		{
+			std::cerr << "Can't open output:" << ec.value() << "," << ec.message() << "\n";
+			return false;
+		}
 	}
 
-	IsSupportedFramerate(ocodec, input_vst_.frameRate());
-
-	output_vst_ = output_ctx_.addStream(output_vec_);
-	output_vst_.setFrameRate(av::Rational{ fps_,1 });
-	output_vst_.setAverageFrameRate(av::Rational{ fps_,1 }); // try to comment this out and look at the output of ffprobe or mpv
-	// it'll show 1k fps regardless of the real fps;
-	// see https://github.com/FFmpeg/FFmpeg/blob/7d4fe0c5cb9501efc4a434053cec85a70cae156e/libavformat/matroskaenc.c#L2659
-	// also used in the CLI ffmpeg utility: https://github.com/FFmpeg/FFmpeg/blob/7d4fe0c5cb9501efc4a434053cec85a70cae156e/fftools/ffmpeg.c#L3058
-	// and https://github.com/FFmpeg/FFmpeg/blob/7d4fe0c5cb9501efc4a434053cec85a70cae156e/fftools/ffmpeg.c#L3364
-	output_vst_.setTimeBase(av::Rational{ 1,fps_ });
-	output_vst_.raw()->codecpar->codec_tag = 0;
-
-
-
-
-	av::Codec acodec = av::findEncodingCodec("aac"); // 明确指定使用 AAC 编码器
-	if (acodec.isNull())
-	{
-		std::cerr << "Can't find aac encoder\n";
-		return false;
-	}
-
-	auto sampleFormats = acodec.supportedSampleFormats(); // 用于音频
-	auto sampleRates = acodec.supportedSamplerates();     // 用于音频
-	auto channelLayouts = acodec.supportedChannelLayouts(); // 用于音频
-
-	{
-		av::AudioEncoderContext audio_encoder_context{ acodec };
-		output_aec_ = std::move(audio_encoder_context);
-	}
-
-	output_aec_.setSampleRate(input_adec_.sampleRate());
-	output_aec_.setSampleFormat(AV_SAMPLE_FMT_FLTP); // 注意：AAC编码器可能不支持所有PCM格式，可能需要重采样
-	output_aec_.setChannelLayout(AV_CH_LAYOUT_STEREO);
-	output_aec_.setBitRate(128000); // 设置一个合适的比特率，如 128kbps
-	output_aec_.setTimeBase(av::Rational(1, input_adec_.sampleRate())); // 使用采样率作为时间基
-
-	//output_aec_.raw()->thread_count = 0;//设置为0，让FFmpeg自动决定最佳线程数 (推荐) 音频不需要
-	output_aec_.open(ec);
-	if (ec)
-	{
-		std::cerr << "Can't open audio encoder: " << ec.value() << "," << ec.message() << "\n";
-		return 1;
-	}
-	output_ast_ = output_ctx_.addStream(output_aec_);
-	output_ast_.setTimeBase(output_aec_.timeBase());
-	output_ast_.raw()->codecpar->codec_tag = 0;
-
-
-	output_ctx_.openOutput(out_uri, ec);
-	if (ec)
-	{
-		std::cerr << "Can't open output:" << ec.value() << "," << ec.message() << "\n";
-		return false;
-	}
 	output_ctx_.dump();
 
-
+	if (output_vec_.isValid())
 	{
-		av::VideoRescaler video_rescaler(output_vec_.width(), output_vec_.height(), output_vec_.pixelFormat());
-		video_rescaler_ = std::move(video_rescaler);
+		try
+		{
+			av::VideoRescaler video_rescaler(output_vec_.width(), output_vec_.height(), output_vec_.pixelFormat());
+			video_rescaler_ = std::move(video_rescaler);
+		}
+		catch (std::exception& e)
+		{
+			printf("VideoRescaler exception :%s\n", e.what());
+			return false;
+		}
 	}
 
+	if (output_aec_.isValid())
 	{
 
 		if (input_adec_.channelLayout() == 0)
@@ -171,10 +191,10 @@ bool PushCameraRtsp::HandlePacket()
 {
 	is_running_ = true;
 	//
-// PROCESS
-//
-// 	  
-    // 在全局或类成员中增加一个变量，并初始化为特殊值
+	// PROCESS
+	//
+	// 	  
+	// 在全局或类成员中增加一个变量，并初始化为特殊值
 	int64_t first_packet_pts = AV_NOPTS_VALUE;
 	// 在主循环开始前，记录整个推流的起始时间（使用单调时钟）
 	int64_t stream_start_time = 0;
@@ -201,9 +221,9 @@ bool PushCameraRtsp::HandlePacket()
 		if (pkt.streamIndex() == input_video_stream_index_)
 		{
 			PrintPacketInfo(pkt, "Read video packet");
-		
+
 			// 1. 如果是第一帧，捕获它的PTS作为我们的“零点”
-			if (first_packet_pts == AV_NOPTS_VALUE) 
+			if (first_packet_pts == AV_NOPTS_VALUE)
 			{
 				first_packet_pts = pkt.raw()->pts;
 				// 同时，记录下当前真实时间作为我们发送时钟的“零点”
@@ -214,7 +234,7 @@ bool PushCameraRtsp::HandlePacket()
 
 			// 3. 将这个干净的偏移量，从输入流的时间基，转换为微秒
 			//    以便用于我们的发送时钟逻辑
-			int64_t pts_offset_us = av_rescale_q(pts_offset,input_vst_.timeBase().getValue(), {1, 1000000});
+			int64_t pts_offset_us = av_rescale_q(pts_offset, input_vst_.timeBase().getValue(), { 1, 1000000 });
 
 			// 4. 计算目标发送时间 
 			int64_t target_send_time_us = stream_start_time + pts_offset_us;
@@ -222,8 +242,9 @@ bool PushCameraRtsp::HandlePacket()
 
 			if (target_send_time_us > now_us)
 			{
-				av_usleep(target_send_time_us - now_us);
-			}		
+				unsigned int delay_us = target_send_time_us - now_us;
+				av_usleep(delay_us);
+			}
 
 			av::Timestamp tsp_offset_us = { pts_offset_us, {1, 1000000} };
 			pkt.setPts(tsp_offset_us);//设置pts，使用自己定义的时间
@@ -244,7 +265,7 @@ bool PushCameraRtsp::HandlePacket()
 				continue;
 			}
 
-			PrintVideoFrameInfo(inpFrame,"inpFrame");
+			PrintVideoFrameInfo(inpFrame, "inpFrame");
 
 			// Change timebase
 			inpFrame.setTimeBase(output_vec_.timeBase());//inpFrame上的pts 设置为output_vec_编码器上的timebase
@@ -287,8 +308,8 @@ bool PushCameraRtsp::HandlePacket()
 			opkt.setStreamIndex(output_vst_.index());
 			opkt.setTimeBase(output_vst_.timeBase());//opkt上的pts设置为output_vst_流上的timebase
 
-			PrintPacketInfo(opkt,"Write video packet");
-			
+			PrintPacketInfo(opkt, "Write video packet");
+
 			//opkt.raw()->pts = av_rescale_q(pts_offset,input_vst_.timeBase().getValue(), // 源时间基
 	  //                                     output_vst_.timeBase().getValue() // 目标时间基
 			//                              );
@@ -302,7 +323,7 @@ bool PushCameraRtsp::HandlePacket()
 				std::cerr << "Error write packet: " << ec.value() << ", " << ec.message() << std::endl;
 				//return false;
 			}
-			
+
 		}
 		else if (pkt.streamIndex() == input_audio_stream_index_)
 		{
@@ -322,7 +343,7 @@ bool PushCameraRtsp::HandlePacket()
 				//continue;
 			}
 
-			PrintAudioSamplesInfo(in_sample,"Samples [in]");
+			PrintAudioSamplesInfo(in_sample, "Samples [in]");
 
 			// Empty samples set should not be pushed to the resampler, but it is valid case for the
 			// end of reading: during samples empty, some cached data can be stored at the resampler
@@ -377,7 +398,7 @@ bool PushCameraRtsp::HandlePacket()
 
 				opkt.setStreamIndex(output_ast_.index());
 
-				PrintPacketInfo(opkt,"Write audio packet");
+				PrintPacketInfo(opkt, "Write audio packet");
 
 				output_ctx_.writePacket(opkt, ec);
 				if (ec)
@@ -385,18 +406,122 @@ bool PushCameraRtsp::HandlePacket()
 					std::cerr << "Error write packet: " << ec << ", " << ec.message() << std::endl;
 					return false;
 				}
-				
+
 			}
 
 			// For the first packets samples can be empty: decoder caching
-			//if (!pkt && !in_sample)
-			//	break;
+			if (!pkt && !in_sample)
+				break;
 
 		}
 	}
 
+	FlushEnd();
 	output_ctx_.writeTrailer();
 	input_ctx_.close();
+
+	return true;
+}
+
+bool PushCameraRtsp::FlushEnd()
+{
+	std::error_code ec;
+
+	if (input_vdec_.isValid())
+	{
+		std::clog << "Flush frames;\n";
+		while (true)
+		{
+			av::VideoFrame frame = input_vdec_.decode(av::Packet(), ec);
+			if (ec)
+			{
+				std::cerr << "Error: " << ec << ", " << ec.message() << std::endl;
+				return false;
+			}
+			if (frame)
+			{
+				av::Packet opkt = output_vec_.encode(frame, ec);
+				if (ec)
+				{
+					std::cerr << "Encoding error: " << ec << std::endl;
+					return false;
+				}
+
+				if (opkt)
+				{
+
+					opkt.setStreamIndex(output_vst_.index());
+
+					std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " / " << opkt.pts().seconds() << " / " << opkt.timeBase() << " / st: " << opkt.streamIndex() << std::endl;
+
+					output_ctx_.writePacket(opkt, ec);
+					if (ec)
+					{
+						std::cerr << "Error write packet: " << ec << ", " << ec.message() << std::endl;
+						return false;
+					}
+				}
+			}
+			else
+			{
+				while (true)
+				{
+					av::Packet opkt = output_vec_.encode(ec);
+					if (ec)
+					{
+						std::cerr << "Encoding error: " << ec << std::endl;
+						return false;
+					}
+					else if (!opkt)
+					{
+						//cerr << "Empty packet\n";
+						//continue;
+						break;
+					}
+
+
+					opkt.setStreamIndex(output_vst_.index());
+
+					std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " / " << opkt.pts().seconds() << " / " << opkt.timeBase() << " / st: " << opkt.streamIndex() << std::endl;
+
+					output_ctx_.writePacket(opkt, ec);
+					if (ec)
+					{
+						std::cerr << "Error write packet: " << ec << ", " << ec.message() << std::endl;
+						return false;
+					}
+				}
+
+				break;
+			}
+		}
+	}
+
+	if (output_aec_.isValid())
+	{
+		std::clog << "Flush encoder:\n";
+		while (true)
+		{
+			av::AudioSamples null(nullptr);
+			av::Packet        opkt = output_aec_.encode(null, ec);
+			if (ec || !opkt)
+				break;
+
+			opkt.setStreamIndex(output_ast_.index());
+
+			std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " , " << opkt.pts().seconds() << " , " << opkt.timeBase() << " , st: " << opkt.streamIndex() << std::endl;
+
+			output_ctx_.writePacket(opkt, ec);
+			if (ec)
+			{
+				std::cerr << "Error write packet: " << ec << ", " << ec.message() << std::endl;
+				return false;
+			}
+
+		}
+	}
+
+	output_ctx_.flush();
 
 	return true;
 }

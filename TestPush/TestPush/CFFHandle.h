@@ -17,6 +17,7 @@ extern "C"
 #include <libswresample/swresample.h>
 #include <libavutil/opt.h>
 #include <libavutil/audio_fifo.h>
+#include <libavutil/time.h>
 
 #pragma comment(lib, "avformat.lib")
 #pragma comment(lib, "avcodec.lib")

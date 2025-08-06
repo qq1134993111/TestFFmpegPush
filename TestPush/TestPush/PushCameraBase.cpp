@@ -5,7 +5,7 @@ PushCameraBase::PushCameraBase()
 	static std::once_flag s_flag;
 	std::call_once(s_flag, []
 		{
-		//	Init();
+			//	Init();
 		});
 }
 
@@ -130,7 +130,7 @@ void PushCameraBase::PrintVideoFrameInfo(const av::VideoFrame& video_frame, cons
 
 void PushCameraBase::PrintAudioSamplesInfo(const av::AudioSamples& audio_samples, const char* help_string /*= "AudioSamples"*/)
 {
-	std::clog << help_string<< ": " << audio_samples.samplesCount()
+	std::clog << help_string << ": " << audio_samples.samplesCount()
 		<< ", ch: " << audio_samples.channelsCount()
 		<< ", freq: " << audio_samples.sampleRate()
 		<< ", name: " << audio_samples.channelsLayoutString()
@@ -394,7 +394,7 @@ void PushCameraBase::SetH264EncoderOption(av::Dictionary& x264_opts, av::VideoEn
 	//thread_count：线程数，0 表示自动
 	//thread_type：FRAME/SLICE 多线程类型
 	vec.raw()->thread_count = 0;
-	vec.raw()->thread_type = FF_THREAD_FRAME| FF_THREAD_SLICE;
+	vec.raw()->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
 }
 
 
