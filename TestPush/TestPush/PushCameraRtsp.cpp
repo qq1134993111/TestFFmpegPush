@@ -200,7 +200,8 @@ bool PushCameraRtsp::HandlePacket()
 
 		if (pkt.streamIndex() == input_video_stream_index_)
 		{
-
+			PrintPacketInfo(pkt, "Read video packet");
+		
 			// 1. 如果是第一帧，捕获它的PTS作为我们的“零点”
 			if (first_packet_pts == AV_NOPTS_VALUE) 
 			{
@@ -224,11 +225,11 @@ bool PushCameraRtsp::HandlePacket()
 				av_usleep(target_send_time_us - now_us);
 			}		
 
-			std::clog << "Read packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " ,seconds " << pkt.pts().seconds() << " ,timeBase " << pkt.timeBase() << " , st: " << pkt.streamIndex() << std::endl;
-
 			av::Timestamp tsp_offset_us = { pts_offset_us, {1, 1000000} };
 			pkt.setPts(tsp_offset_us);//设置pts，使用自己定义的时间
-			
+
+			PrintPacketInfo(pkt, "Set New Pts video packet");
+
 			// DECODING
 			auto inpFrame = input_vdec_.decode(pkt, ec);//inpFrame的pts为input_vdec_ 解码器上的timebase
 
@@ -243,18 +244,14 @@ bool PushCameraRtsp::HandlePacket()
 				continue;
 			}
 
-			std::clog << "inpFrame: pts=" << inpFrame.pts()
-				<< " seconds: " << inpFrame.pts().seconds() << " timeBase: " << inpFrame.timeBase() <<
-				", " << inpFrame.width() << "x" << inpFrame.height() << ", size=" << inpFrame.size()
-				<< ", ref=" << inpFrame.isReferenced() << ":" << inpFrame.refCount() << "  type: " << inpFrame.pictureType() << std::endl;
+			PrintVideoFrameInfo(inpFrame,"inpFrame");
 
 			// Change timebase
 			inpFrame.setTimeBase(output_vec_.timeBase());//inpFrame上的pts 设置为output_vec_编码器上的timebase
 			inpFrame.setStreamIndex(output_vst_.index());
 			inpFrame.setPictureType();
 
-			std::clog << "inpFrame: pts=" << inpFrame.pts() << " ,seconds: " << inpFrame.pts().seconds() << " ,timeBase " << inpFrame.timeBase() 
-				<< ", " << inpFrame.width() << "x" << inpFrame.height() << ", size=" << inpFrame.size() << ", ref=" << inpFrame.isReferenced() << ":" << inpFrame.refCount() << " , type: " << inpFrame.pictureType() << std::endl;
+			PrintVideoFrameInfo(inpFrame, "inpFrame set timeBase");
 
 			if (inpFrame.pixelFormat() == AV_PIX_FMT_YUVJ422P)
 			{
@@ -270,12 +267,7 @@ bool PushCameraRtsp::HandlePacket()
 				return false;
 			}
 
-			std::clog << "outFrame: pts=" << outFrame.pts()
-				<< " seconds: " << outFrame.pts().seconds() << " timeBase: " << outFrame.timeBase()
-				<< ", " << outFrame.width() << "x" << outFrame.height() << ", size=" << outFrame.size()
-				<< ", ref=" << outFrame.isReferenced() << ":" << outFrame.refCount() << " type: " << outFrame.pictureType() << std::endl;
-
-			//outFrame.raw()->pkt_dts = outFrame.raw()->pts;
+			PrintVideoFrameInfo(inpFrame, "outFrame");
 
 			// ENCODE
 			av::Packet opkt = output_vec_.encode(outFrame, ec);//opkt上的pts和outFrame一致
@@ -289,19 +281,18 @@ bool PushCameraRtsp::HandlePacket()
 				std::cerr << "Empty packet\n";
 				continue;
 			}
+			PrintPacketInfo(opkt, "encode video packet");
 
 			// output stream
 			opkt.setStreamIndex(output_vst_.index());
 			opkt.setTimeBase(output_vst_.timeBase());//opkt上的pts设置为output_vst_流上的timebase
-			std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " ,seconds=" << opkt.pts().seconds() << " ,timeBase " << opkt.timeBase() << " , st: " << opkt.streamIndex() << std::endl;
 
-
+			PrintPacketInfo(opkt,"Write video packet");
+			
 			//opkt.raw()->pts = av_rescale_q(pts_offset,input_vst_.timeBase().getValue(), // 源时间基
 	  //                                     output_vst_.timeBase().getValue() // 目标时间基
 			//                              );
 			//opkt.raw()->dts = opkt.raw()->pts; // 对于直播流通常如此
-
-			std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " ,seconds=" << opkt.pts().seconds() << " ,timeBase " << opkt.timeBase() << " , st: " << opkt.streamIndex() << std::endl;
 
 
 			// 现在，以接近实时的速率发送数据包
@@ -315,8 +306,7 @@ bool PushCameraRtsp::HandlePacket()
 		}
 		else if (pkt.streamIndex() == input_audio_stream_index_)
 		{
-			std::clog << "Read audio packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " / " << pkt.pts().seconds() << " / " << pkt.timeBase() << " / st: " << pkt.streamIndex() << std::endl;
-
+			PrintPacketInfo(pkt, "Read audio packet");
 
 			// DECODING
 			av::AudioSamples in_sample = input_adec_.decode(pkt, ec);
@@ -332,14 +322,7 @@ bool PushCameraRtsp::HandlePacket()
 				//continue;
 			}
 
-			std::clog << "  Samples [in]: " << in_sample.samplesCount()
-				<< ", ch: " << in_sample.channelsCount()
-				<< ", freq: " << in_sample.sampleRate()
-				<< ", name: " << in_sample.channelsLayoutString()
-				<< ", pts: " << in_sample.pts().seconds()
-				<< ", ref=" << in_sample.isReferenced() << ":" << in_sample.refCount()
-				<< std::endl;
-
+			PrintAudioSamplesInfo(in_sample,"Samples [in]");
 
 			// Empty samples set should not be pushed to the resampler, but it is valid case for the
 			// end of reading: during samples empty, some cached data can be stored at the resampler
@@ -373,13 +356,7 @@ bool PushCameraRtsp::HandlePacket()
 				}
 				else
 				{
-					std::clog << "  Samples [ou]: " << ouSamples.samplesCount()
-						<< ", ch: " << ouSamples.channelsCount()
-						<< ", freq: " << ouSamples.sampleRate()
-						<< ", name: " << ouSamples.channelsLayoutString()
-						<< ", pts: " << ouSamples.pts().seconds()
-						<< ", ref=" << ouSamples.isReferenced() << ":" << ouSamples.refCount()
-						<< std::endl;
+					PrintAudioSamplesInfo(ouSamples, "Samples [ou]");
 				}
 
 				// ENCODE
@@ -394,13 +371,13 @@ bool PushCameraRtsp::HandlePacket()
 				}
 				else if (!opkt)
 				{
-					//cerr << "Empty packet\n";
+					std::cerr << "Empty packet\n";
 					continue;
 				}
 
 				opkt.setStreamIndex(output_ast_.index());
 
-				std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " seconds " << opkt.pts().seconds() << " / " << opkt.timeBase() << " / st: " << opkt.streamIndex() << std::endl;
+				PrintPacketInfo(opkt,"Write audio packet");
 
 				output_ctx_.writePacket(opkt, ec);
 				if (ec)

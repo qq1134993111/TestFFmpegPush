@@ -27,6 +27,10 @@ public:
 	virtual bool InitOutput(const std::string& out_uri,const std::string& out_format_name, av::Dictionary out_format_options = {});
 	virtual bool HandlePacket()=0;
 protected:
+	void PrintPacketInfo(const av::Packet& pkt, const char* help_string="Packet");
+	void PrintVideoFrameInfo(const av::VideoFrame& video_frame, const char* help_string = "VideoFrame");
+	void PrintAudioSamplesInfo(const av::AudioSamples& audio_samples, const char* help_string = "AudioSamples");
+protected:
 	//
 	// INPUT
 	//

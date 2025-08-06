@@ -129,7 +129,7 @@ bool PushCameraRtmp::HandlePacket()
 		if (pkt.streamIndex() == input_video_stream_index_)
 		{
 
-			//std::clog << "Read packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " / " << pkt.pts().seconds() << " / " << pkt.timeBase() << " / st: " << pkt.streamIndex() << std::endl;
+			PrintPacketInfo(pkt, "Read video packet");
 
 			// DECODING
 			auto inpFrame = input_vdec_.decode(pkt, ec);
@@ -145,14 +145,14 @@ bool PushCameraRtmp::HandlePacket()
 				continue;
 			}
 
-			//std::clog << "inpFrame: pts=" << inpFrame.pts() << " / " << inpFrame.pts().seconds() << " / " << inpFrame.timeBase() << ", " << inpFrame.width() << "x" << inpFrame.height() << ", size=" << inpFrame.size() << ", ref=" << inpFrame.isReferenced() << ":" << inpFrame.refCount() << " / type: " << inpFrame.pictureType() << std::endl;
+			PrintVideoFrameInfo(inpFrame,"inpFrame");
 
 			// Change timebase
 			inpFrame.setTimeBase(output_vec_.timeBase());
 			inpFrame.setStreamIndex(output_vst_.index());
 			inpFrame.setPictureType();
 
-			//std::clog << "inpFrame: pts=" << inpFrame.pts() << " / " << inpFrame.pts().seconds() << " / " << inpFrame.timeBase() << ", " << inpFrame.width() << "x" << inpFrame.height() << ", size=" << inpFrame.size() << ", ref=" << inpFrame.isReferenced() << ":" << inpFrame.refCount() << " / type: " << inpFrame.pictureType() << std::endl;
+			PrintVideoFrameInfo(inpFrame, "inpFrame set timeBase");
 
 			if (inpFrame.pixelFormat() == AV_PIX_FMT_YUVJ422P)
 			{
@@ -168,7 +168,7 @@ bool PushCameraRtmp::HandlePacket()
 				return false;
 			}
 
-			//std::clog << "outFrame: pts=" << outFrame.pts() << " / " << outFrame.pts().seconds() << " / " << outFrame.timeBase() << ", " << outFrame.width() << "x" << outFrame.height() << ", size=" << outFrame.size() << ", ref=" << outFrame.isReferenced() << ":" << outFrame.refCount() << " / type: " << outFrame.pictureType() << std::endl;
+			PrintVideoFrameInfo(inpFrame, "outFrame");
 
 			// ENCODE
 			av::Packet opkt = output_vec_.encode(outFrame, ec);
@@ -186,7 +186,7 @@ bool PushCameraRtmp::HandlePacket()
 			// output stream
 			opkt.setStreamIndex(output_vst_.index());
 
-			//std::clog << "Write packet: pts=" << opkt.pts() << ", dts=" << opkt.dts() << " / " << opkt.pts().seconds() << " / " << opkt.timeBase() << " / st: " << opkt.streamIndex() << std::endl;
+			PrintPacketInfo(opkt, "Write video packet");
 
 			output_ctx_.writePacket(opkt, ec);
 			if (ec)
@@ -197,7 +197,7 @@ bool PushCameraRtmp::HandlePacket()
 			}
 		else if (pkt.streamIndex() == input_audio_stream_index_)
 		{
-			//std::clog << "Read audio packet: pts=" << pkt.pts() << ", dts=" << pkt.dts() << " / " << pkt.pts().seconds() << " / " << pkt.timeBase() << " / st: " << pkt.streamIndex() << std::endl;
+			PrintPacketInfo(pkt, "Read audio packet");
 
 			pkt.setStreamIndex(output_ast_.index());
 			output_ctx_.writePacket(pkt, ec);

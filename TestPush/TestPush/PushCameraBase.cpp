@@ -5,7 +5,7 @@ PushCameraBase::PushCameraBase()
 	static std::once_flag s_flag;
 	std::call_once(s_flag, []
 		{
-			Init();
+		//	Init();
 		});
 }
 
@@ -111,6 +111,33 @@ bool PushCameraBase::InitOutput(const std::string& out_uri, const std::string& o
 	return true;
 }
 
+
+void PushCameraBase::PrintPacketInfo(const av::Packet& pkt, const char* help_string)
+{
+	std::clog << help_string << ": pts=" << pkt.pts() << " , dts=" << pkt.dts()
+		<< " , seconds=" << pkt.pts().seconds() << " , timeBase=" << pkt.timeBase()
+		<< " , st=" << pkt.streamIndex() << std::endl;
+}
+
+void PushCameraBase::PrintVideoFrameInfo(const av::VideoFrame& video_frame, const char* help_string /*= "VideoFrame"*/)
+{
+	std::clog << help_string << ": pts=" << video_frame.pts()
+		<< " , seconds=" << video_frame.pts().seconds() << " , timeBase=" << video_frame.timeBase()
+		<< " , " << video_frame.width() << "x" << video_frame.height() << " , size=" << video_frame.size()
+		<< " , ref=" << video_frame.isReferenced() << ":" << video_frame.refCount() << " , pictureType=" << video_frame.pictureType() << std::endl;
+
+}
+
+void PushCameraBase::PrintAudioSamplesInfo(const av::AudioSamples& audio_samples, const char* help_string /*= "AudioSamples"*/)
+{
+	std::clog << help_string<< ": " << audio_samples.samplesCount()
+		<< ", ch: " << audio_samples.channelsCount()
+		<< ", freq: " << audio_samples.sampleRate()
+		<< ", name: " << audio_samples.channelsLayoutString()
+		<< ", pts: " << audio_samples.pts().seconds()
+		<< ", ref=" << audio_samples.isReferenced() << ":" << audio_samples.refCount()
+		<< std::endl;
+}
 
 void PushCameraBase::Init(int log_leve /*= AV_LOG_DEBUG*/)
 {
