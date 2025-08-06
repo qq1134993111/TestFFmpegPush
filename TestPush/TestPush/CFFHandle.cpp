@@ -45,7 +45,7 @@ bool CFFInput::InitInput(const std::string& in_uri, const std::string& in_format
 
 	//这里可以加参数打开，例如可以指定采集帧率
 	AVDictionary* options = nullptr;
-	//av_dict_set(&options, "rtbufsize", "30412800", 0);//默认大小3041280
+	av_dict_set(&options, "rtbufsize", "256M", 0);//默认大小3041280
 	//av_dict_set(&options, "framerate", "30", 0);
 	//av_dict_set(&options, "use_wallclock_as_timestamps", "1", 0);// 设置使用系统时间戳
 
@@ -650,8 +650,8 @@ bool CFFHandle::HandlePakege()
 			return 0;
 		}
 		//转换 PTS
-		video_out_frame_->pts = av_rescale_q(vedio_in_frame_->pts,
-			input_vst_->time_base, // 原始时间基准
+		video_out_frame_->pts = av_rescale_q(src_frame->pts,
+			input_vdec_->time_base, // 原始时间基准
 			output_vec_->time_base);  // 目标时间基准
 
 		printf("out_frame: pts=%lld , seconds=%.4f , timeBase=%d/%d , %dx%d ,pictureType=%d\n",
@@ -683,7 +683,7 @@ bool CFFHandle::HandlePakege()
 		return 0;
 		};
 
-
+	int64_t next_audio_pts = 0;
 	auto handle_audio_frame = [&, this](AVFrame* src_frame)->int {
 
 		auto func_get_layout_name = [](const AVFrame* frame)->char*
@@ -696,7 +696,7 @@ bool CFFHandle::HandlePakege()
 		printf("Samples [in]: nb_samples:%d , ch:%d , freq:%d , name:%s , pts seconds:%.4f  \n",
 			src_frame->nb_samples, src_frame->ch_layout.nb_channels,
 			src_frame->sample_rate, func_get_layout_name(src_frame),
-			src_frame->pts * av_q2d(input_adec_->time_base));
+			src_frame->pts * av_q2d(input_ast_->time_base));
 
 		// 进行转换
 		int ret = swr_convert_frame(audio_swr_context_, audio_resampled_frame_, src_frame);
@@ -724,7 +724,12 @@ bool CFFHandle::HandlePakege()
 				continue;
 			}
 
-			audio_out_frame_->pts = av_rescale_q(audio_out_frame_->pts, input_ast_->time_base, output_aec_->time_base);
+			//audio_out_frame_->pts = av_rescale_q(src_frame->pts, input_ast_->time_base, output_aec_->time_base);
+			audio_out_frame_->pts = next_audio_pts;
+		
+
+			// 为下一帧更新PTS
+			next_audio_pts += audio_out_frame_->nb_samples; // 1024
 
 			printf("Samples [out]: nb_samples:%d , ch:%d , freq:%d , name:%s , pts seconds:%.4f  \n",
 				audio_out_frame_->nb_samples, audio_out_frame_->ch_layout.nb_channels,
@@ -811,7 +816,8 @@ bool CFFHandle::HandlePakege()
 				av_usleep((unsigned int)delay_us);
 			}
 			//设置pts，使用自己定义的时间
-			in_pkt->pts = av_rescale_q(pts_offset_us, { 1, 1000000 }, in_pkt->time_base);
+			in_pkt->pts = av_rescale_q(pts_offset_us, { 1, 1000000 }, input_vst_->time_base);
+			in_pkt->dts = in_pkt->pts;
 
 			printf("set new pts vedio packet: pts=%lld , dts=%lld , seconds=%.4f , timeBase=%d/%d ,st=%d \n",
 				in_pkt->pts, in_pkt->dts, in_pkt->pts * av_q2d(input_vst_->time_base),
@@ -824,8 +830,8 @@ bool CFFHandle::HandlePakege()
 			if (in_pkt->pts != AV_NOPTS_VALUE)
 			{
 				printf("Read audio packet: pts=%lld , dts=%lld , seconds=%.4f , timeBase=%d/%d ,st=%d \n",
-					in_pkt->pts, in_pkt->dts, in_pkt->pts * av_q2d(input_vst_->time_base),
-					input_vst_->time_base.num, input_vst_->time_base.den, in_pkt->stream_index);
+					in_pkt->pts, in_pkt->dts, in_pkt->pts * av_q2d(input_ast_->time_base),
+					input_ast_->time_base.num, input_ast_->time_base.den, in_pkt->stream_index);
 			}
 			else
 			{
